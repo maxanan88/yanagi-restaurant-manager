@@ -449,14 +449,14 @@ elif page == "📱 QR สั่งอาหาร":
     st.header("📱 สร้าง QR โค้ดสำหรับลูกค้าสั่งอาหาร")
     st.write("ให้ลูกค้าสแกน QR นี้ที่โต๊ะ เพื่อสั่งอาหารได้เองจากมือถือ")
 
-    st.warning(
-        "⚠️ ต้องใช้ **IP เครื่องที่รันโปรแกรม** (ไม่ใช่ localhost) และมือถือลูกค้าต้องต่อ "
-        "WiFi เดียวกับร้าน ถึงจะสแกนแล้วเข้าเว็บได้"
+    st.info(
+        "ℹ️ ใส่ลิงก์เว็บที่ deploy ไว้ (เช่น https://yanagi-restaurant-manager-xxxxx.streamlit.app) "
+        "ลูกค้าสแกนแล้วใช้เน็ตมือถือของตัวเองเปิดได้เลย ไม่ต้องต่อ WiFi ร้าน"
     )
 
     base_url = st.text_input(
         "ที่อยู่เว็บของร้าน (Base URL)",
-        placeholder="เช่น http://192.168.1.10:8501",
+        placeholder="เช่น https://yanagi-restaurant-manager-xxxxx.streamlit.app",
     )
     table_number = st.text_input("หมายเลขโต๊ะ", value="1")
 
