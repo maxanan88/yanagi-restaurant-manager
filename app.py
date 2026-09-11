@@ -400,15 +400,20 @@ elif page == "📊 รายงานยอดขาย":
     else:
         summary = (
             sales_df.groupby("menu_name")
-            .agg(จำนวนที่ขาย=("qty_sold", "sum"), ยอดขายรวม=("total_price", "sum"))
-            .sort_values("จำนวนที่ขาย", ascending=False)
+            .agg(total_qty=("qty_sold", "sum"), total_revenue=("total_price", "sum"))
+            .sort_values("total_qty", ascending=False)
         )
 
         top5 = summary.head(5)
 
         st.subheader("🏆 เมนูขายดี Top 5 (นับจากจำนวนจาน)")
-        st.bar_chart(top5["จำนวนที่ขาย"])
-        st.dataframe(top5, use_container_width=True)
+        st.bar_chart(top5["total_qty"])
+
+        top5_display = top5.rename(columns={
+            "total_qty": "จำนวนที่ขาย",
+            "total_revenue": "ยอดขายรวม",
+        })
+        st.dataframe(top5_display, use_container_width=True)
 
         st.subheader("📋 ประวัติการขายทั้งหมด")
         st.dataframe(sales_df, use_container_width=True)
