@@ -449,11 +449,6 @@ elif page == "📱 QR สั่งอาหาร":
     st.header("📱 สร้าง QR โค้ดสำหรับลูกค้าสั่งอาหาร")
     st.write("ให้ลูกค้าสแกน QR นี้ที่โต๊ะ เพื่อสั่งอาหารได้เองจากมือถือ")
 
-    st.info(
-        
-        
-    )
-
     base_url = st.text_input(
         "ที่อยู่เว็บของร้าน (Base URL)",
         placeholder="เช่น https://yanagi-restaurant-manager-xxxxx.streamlit.app",
