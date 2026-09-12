@@ -1,4 +1,9 @@
-streamlit
-pandas
-qrcode[pil]
-pillow
+[[users]]
+username = "MSAN"
+password = "8899M"
+role = "owner"
+
+[[users]]
+username = "kitchen1"
+password = "1234"
+role = "staff"
