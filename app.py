@@ -8,8 +8,8 @@ from database import (
     init_db, add_transaction, get_all_transactions, delete_transaction,
     add_or_update_item, get_all_inventory, add_recipe_item, get_all_recipes,
     delete_recipe_item, sell_menu, set_menu_price, get_menu_price,
-    add_sale_log, get_all_sales, get_menu_list, create_order,
-    get_active_orders, get_order_items, update_order_status
+    add_sale_log, get_all_sales, get_menu_list, get_all_categories,
+    create_order, get_active_orders, get_order_items, update_order_status
 )
 
 # ---------------- ตั้งค่าร้าน (แก้ตรงนี้ให้เป็นร้านของพี่ได้เลย) ----------------
@@ -52,11 +52,14 @@ if query_params.get("page") == "order":
             st.write("เลือกเมนูที่ต้องการสั่ง:")
 
             qty_inputs = {}
-            for _, row in menu_df.iterrows():
-                qty_inputs[row["menu_name"]] = st.number_input(
-                    f"{row['menu_name']} ({row['price']:,.0f} บาท)",
-                    min_value=0, step=1, key=f"cust_qty_{row['menu_name']}"
-                )
+            # แบ่งเมนูเป็นหมวดหมู่ ให้ลูกค้าหาง่ายขึ้น
+            for category_name, group_df in menu_df.groupby("category"):
+                st.markdown(f"**🍽️ {category_name}**")
+                for _, row in group_df.iterrows():
+                    qty_inputs[row["menu_name"]] = st.number_input(
+                        f"{row['menu_name']} ({row['price']:,.0f} บาท)",
+                        min_value=0, step=1, key=f"cust_qty_{row['menu_name']}"
+                    )
 
             submitted_order = st.form_submit_button("🛒 สั่งอาหาร")
 
@@ -77,11 +80,24 @@ if query_params.get("page") == "order":
     st.stop()
 
 # ================= ระบบ login (สำหรับพนักงาน/เจ้าของร้าน) =================
-# อ่านรหัสผ่านจาก Streamlit Secrets แทนการฝังไว้ในโค้ดตรงๆ (ปลอดภัยกว่า)
+# รายชื่อผู้ใช้ + บทบาท อ่านจาก Streamlit Secrets เป็นหลัก (ปลอดภัยกว่าฝังในโค้ด)
 # วิธีตั้งค่า: ในเครื่อง ใช้ไฟล์ .streamlit/secrets.toml
 #            บน Streamlit Cloud ตั้งค่าใน Settings > Secrets ของแอป
-USERNAME = st.secrets.get("APP_USERNAME", "MSAN")
-PASSWORD = st.secrets.get("APP_PASSWORD", "8899M")
+# รูปแบบใน secrets.toml:
+#   [[users]]
+#   username = "MSAN"
+#   password = "8899M"
+#   role = "owner"       # เห็นทุกเมนู
+#
+#   [[users]]
+#   username = "kitchen1"
+#   password = "1234"
+#   role = "staff"       # เห็นแค่หน้าครัวกับขายเมนู
+DEFAULT_USERS = [
+    {"username": "MSAN", "password": "8899M", "role": "owner"},
+    {"username": "kitchen1", "password": "1234", "role": "staff"},
+]
+USERS = st.secrets.get("users", DEFAULT_USERS)
 
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -95,12 +111,35 @@ if not st.session_state.logged_in:
         login_submitted = st.form_submit_button("เข้าสู่ระบบ")
 
         if login_submitted:
-            if input_username == USERNAME and input_password == PASSWORD:
+            matched_user = next(
+                (u for u in USERS if u["username"] == input_username and u["password"] == input_password),
+                None
+            )
+            if matched_user:
                 st.session_state.logged_in = True
+                st.session_state.role = matched_user["role"]
                 st.rerun()
             else:
                 st.error("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง")
     st.stop()
+
+USER_ROLE = st.session_state.get("role", "staff")
+
+# หน้าที่แต่ละบทบาทเห็นได้
+OWNER_PAGES = [
+    "🏠 หน้าหลัก",
+    "📝 การเงิน",
+    "📦 สต็อกวัตถุดิบ",
+    "🍳 สูตรอาหาร",
+    "🧾 ขายเมนู",
+    "📊 รายงานยอดขาย",
+    "👨‍🍳 ครัว (ออเดอร์)",
+    "📱 QR สั่งอาหาร",
+]
+STAFF_PAGES = [
+    "👨‍🍳 ครัว (ออเดอร์)",
+    "🧾 ขายเมนู",
+]
 
 # ---------------- Sidebar: โลโก้ + ชื่อร้าน + เมนูนำทาง ----------------
 with st.sidebar:
@@ -110,26 +149,20 @@ with st.sidebar:
         st.markdown(f"<div style='font-size:60px; text-align:center'>{LOGO_EMOJI}</div>", unsafe_allow_html=True)
 
     st.markdown(f"<h3 style='text-align:center'>{RESTAURANT_NAME}</h3>", unsafe_allow_html=True)
+    role_label = "เจ้าของร้าน" if USER_ROLE == "owner" else "พนักงานครัว"
+    st.caption(f"👤 เข้าสู่ระบบในบทบาท: {role_label}")
     st.divider()
 
     page = st.radio(
         "เมนู",
-        [
-            "🏠 หน้าหลัก",
-            "📝 การเงิน",
-            "📦 สต็อกวัตถุดิบ",
-            "🍳 สูตรอาหาร",
-            "🧾 ขายเมนู",
-            "📊 รายงานยอดขาย",
-            "👨‍🍳 ครัว (ออเดอร์)",
-            "📱 QR สั่งอาหาร",
-        ],
+        OWNER_PAGES if USER_ROLE == "owner" else STAFF_PAGES,
         label_visibility="collapsed",
     )
 
     st.divider()
     if st.button("🚪 ออกจากระบบ"):
         st.session_state.logged_in = False
+        st.session_state.role = None
         st.rerun()
 
 # ================= หน้า: หน้าหลัก (แดชบอร์ด) =================
@@ -304,21 +337,31 @@ elif page == "📦 สต็อกวัตถุดิบ":
 elif page == "🍳 สูตรอาหาร":
     st.header("🍳 จัดการสูตรอาหาร")
 
+    existing_categories = get_all_categories()
+    category_options = existing_categories + ["+ เพิ่มหมวดหมู่ใหม่"] if existing_categories else ["+ เพิ่มหมวดหมู่ใหม่"]
+
     with st.form("recipe_form", clear_on_submit=True):
         menu_name = st.text_input("ชื่อเมนู")
+
+        category_choice = st.selectbox("หมวดหมู่เมนู", category_options)
+        new_category_input = ""
+        if category_choice == "+ เพิ่มหมวดหมู่ใหม่":
+            new_category_input = st.text_input("พิมพ์ชื่อหมวดหมู่ใหม่ (เช่น อาหารจานหลัก, เครื่องดื่ม, ของหวาน)")
+
         item_name_recipe = st.text_input("ชื่อวัตถุดิบที่ใช้")
         qty_used = st.number_input("จำนวนที่ใช้ต่อจาน", min_value=0.0, step=0.1)
         price = st.number_input("ราคาขายต่อจาน (บาท)", min_value=0.0, step=1.0)
 
         submitted_recipe = st.form_submit_button("➕ เพิ่มวัตถุดิบเข้าสูตรอาหาร")
         if submitted_recipe:
-            if menu_name and item_name_recipe:
+            final_category = new_category_input.strip() if category_choice == "+ เพิ่มหมวดหมู่ใหม่" else category_choice
+            if menu_name and item_name_recipe and final_category:
                 add_recipe_item(menu_name, item_name_recipe, qty_used)
-                set_menu_price(menu_name, price)
-                st.success(f"เพิ่ม '{item_name_recipe}' เข้าสูตร '{menu_name}' เรียบร้อยแล้ว! ✅")
+                set_menu_price(menu_name, price, final_category)
+                st.success(f"เพิ่ม '{item_name_recipe}' เข้าสูตร '{menu_name}' (หมวด {final_category}) เรียบร้อยแล้ว! ✅")
                 st.rerun()
             else:
-                st.error("กรุณากรอกชื่อเมนูและวัตถุดิบให้ครบ")
+                st.error("กรุณากรอกชื่อเมนู วัตถุดิบ และหมวดหมู่ให้ครบ")
 
     recipes_df = get_all_recipes()
     if recipes_df.empty:
@@ -343,19 +386,25 @@ elif page == "🍳 สูตรอาหาร":
             st.success("ลบรายการเรียบร้อยแล้ว! ✅")
             st.rerun()
 
-        st.subheader("💰 แก้ไขราคาขายเมนู")
-        menu_names_for_price = recipes_df["menu_name"].unique()
+        st.subheader("💰 แก้ไขราคาขาย / หมวดหมู่เมนู")
+        menu_list_df = get_menu_list()
+        menu_names_for_price = menu_list_df["menu_name"].unique()
         selected_menu_for_price = st.selectbox(
-            "เลือกเมนูที่จะแก้ไขราคา", menu_names_for_price, key="edit_price_select"
+            "เลือกเมนูที่จะแก้ไข", menu_names_for_price, key="edit_price_select"
         )
         current_price = get_menu_price(selected_menu_for_price)
+        current_category = menu_list_df[menu_list_df["menu_name"] == selected_menu_for_price]["category"].iloc[0]
+
         new_price = st.number_input(
             "ราคาขายใหม่ (บาท)", min_value=0.0, step=1.0,
             value=float(current_price), key="edit_price_input"
         )
-        if st.button("💾 อัปเดตราคาขาย"):
-            set_menu_price(selected_menu_for_price, new_price)
-            st.success(f"อัปเดตราคา '{selected_menu_for_price}' เป็น {new_price:,.0f} บาท เรียบร้อย! ✅")
+        new_category = st.text_input(
+            "หมวดหมู่", value=current_category, key="edit_category_input"
+        )
+        if st.button("💾 อัปเดตข้อมูลเมนู"):
+            set_menu_price(selected_menu_for_price, new_price, new_category.strip() or "อื่นๆ")
+            st.success(f"อัปเดต '{selected_menu_for_price}' เรียบร้อย! ✅")
             st.rerun()
 
 # ================= หน้า: ขายเมนู =================
