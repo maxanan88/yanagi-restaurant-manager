@@ -128,17 +128,39 @@ def delete_transaction(transaction_id):
 
 # ---------------- Inventory (วัตถุดิบคงคลัง) ----------------
 
-def add_or_update_item(item_name, quantity, unit, low_stock_threshold):
+def add_or_update_item(item_name, quantity, unit, low_stock_threshold, mode="add"):
+    """
+    mode="add"  -> เพิ่มจำนวนเข้าไปจากของเดิม (ใช้ตอนของเข้าใหม่)
+    mode="set"  -> ตั้งยอดใหม่ทับของเดิมเลย (ใช้ตอนนับสต็อกจริงแล้วปรับให้ตรง)
+    """
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO inventory (item_name, quantity, unit, low_stock_threshold)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(item_name) DO UPDATE SET
-            quantity = quantity + excluded.quantity,
-            unit = excluded.unit,
-            low_stock_threshold = excluded.low_stock_threshold
-    """, (item_name, quantity, unit, low_stock_threshold))
+    if mode == "set":
+        cursor.execute("""
+            INSERT INTO inventory (item_name, quantity, unit, low_stock_threshold)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(item_name) DO UPDATE SET
+                quantity = excluded.quantity,
+                unit = excluded.unit,
+                low_stock_threshold = excluded.low_stock_threshold
+        """, (item_name, quantity, unit, low_stock_threshold))
+    else:
+        cursor.execute("""
+            INSERT INTO inventory (item_name, quantity, unit, low_stock_threshold)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(item_name) DO UPDATE SET
+                quantity = quantity + excluded.quantity,
+                unit = excluded.unit,
+                low_stock_threshold = excluded.low_stock_threshold
+        """, (item_name, quantity, unit, low_stock_threshold))
+    conn.commit()
+    conn.close()
+
+
+def delete_inventory_item(item_name):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM inventory WHERE item_name = ?", (item_name,))
     conn.commit()
     conn.close()
 
@@ -234,7 +256,7 @@ def get_all_sales():
 
 
 def get_menu_price(menu_name):
-    conn = get_connection()  # เดิมพิมพ์ผิดเป็น "con" ทำให้ error ตอนขายเมนู
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT price FROM menu_prices WHERE menu_name = ?", (menu_name,))
     result = cursor.fetchone()
@@ -314,13 +336,5 @@ def update_order_status(order_id, status):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("UPDATE orders SET status = ? WHERE id = ?", (status, order_id))
-    conn.commit()
-    conn.close()
-
-
-def delete_menu_item(menu_name):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM menu_prices WHERE menu_name = ?", (menu_name,))
     conn.commit()
     conn.close()
