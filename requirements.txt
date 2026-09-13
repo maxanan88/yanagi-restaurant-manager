@@ -3,3 +3,4 @@ pandas
 qrcode[pil]
 pillow
 openpyxl
+libsql
