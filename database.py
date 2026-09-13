@@ -196,13 +196,21 @@ def set_menu_price(menu_name, price, category="อื่นๆ"):
 
 
 def get_all_categories():
-    """เอาไว้แนะนำหมวดหมู่ที่เคยใช้แล้ว ตอนกรอกฟอร์มสร้างสูตรอาหาร"""
+    """เอาไว้แนะนำหมวดหมู่ที่เคยใช้แล้ว ตอนกรอกฟอร์มเพิ่มเมนู"""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT DISTINCT category FROM menu_prices ORDER BY category")
     result = [row[0] for row in cursor.fetchall()]
     conn.close()
     return result
+
+
+def delete_menu_item(menu_name):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM menu_prices WHERE menu_name = ?", (menu_name,))
+    conn.commit()
+    conn.close()
 
 
 # ---------------- Sales log (สำหรับหน้ารายงาน) ----------------
