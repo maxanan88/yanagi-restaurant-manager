@@ -340,6 +340,22 @@ def get_order_items(order_id):
     return df
 
 
+def get_active_order_items_by_table(table_no):
+    """รวมรายการอาหารจากทุกออเดอร์ที่ยังไม่เสร็จของโต๊ะนั้น (เผื่อลูกค้าสั่งหลายรอบ) เอาไว้ทำสรุปยอด"""
+    conn = get_connection()
+    df = pd.read_sql_query(
+        """
+        SELECT oi.menu_name, oi.qty, oi.price
+        FROM order_items oi
+        JOIN orders o ON oi.order_id = o.id
+        WHERE o.table_no = ? AND o.status != 'เสร็จแล้ว'
+        """,
+        conn, params=(table_no,)
+    )
+    conn.close()
+    return df
+
+
 def update_order_status(order_id, status):
     conn = get_connection()
     cursor = conn.cursor()
