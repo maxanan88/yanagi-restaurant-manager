@@ -1,20 +1,28 @@
-import sqlite3
 from datetime import datetime
+import streamlit as st
 import pandas as pd
+import libsql
 
-DB_NAME = "restaurant.db"
+# ---------------- เชื่อมต่อฐานข้อมูล Turso (Cloud) ----------------
+# เปลี่ยนจาก SQLite ไฟล์ในเครื่อง (หายทุกครั้งที่แอป redeploy/restart บน Streamlit Cloud)
+# มาเป็นฐานข้อมูลบนคลาวด์ผ่าน Turso แทน ข้อมูลจะอยู่ถาวรไม่หายแล้ว
+# ต้องตั้งค่า Secrets ใน Streamlit Cloud ก่อน (ดูคำแนะนำที่ให้ไว้):
+#   [turso]
+#   url = "libsql://xxxxx.turso.io"
+#   auth_token = "xxxxxxxxxx"
 
 
 def get_connection():
-    return sqlite3.connect(DB_NAME)
+    turso_url = st.secrets["turso"]["url"]
+    turso_token = st.secrets["turso"]["auth_token"]
+    return libsql.connect(database=turso_url, auth_token=turso_token)
 
 
 def init_db():
     conn = get_connection()
-    cursor = conn.cursor()
 
     # ตารางรายรับ-รายจ่าย
-    cursor.execute("""
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             date TEXT NOT NULL,
@@ -26,7 +34,7 @@ def init_db():
     """)
 
     # ตารางวัตถุดิบคงคลัง
-    cursor.execute("""
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS inventory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             item_name TEXT NOT NULL UNIQUE,
@@ -36,8 +44,8 @@ def init_db():
         )
     """)
 
-    # ตารางสูตรอาหาร (เมนูนึงใช้วัตถุดิบหลายอย่าง)
-    cursor.execute("""
+    # ตารางสูตรอาหาร (เมนูนึงใช้วัตถุดิบหลายอย่าง) — เก็บโครงสร้างไว้เผื่อใช้ในอนาคต
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS recipes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             menu_name TEXT NOT NULL,
@@ -46,8 +54,8 @@ def init_db():
         )
     """)
 
-    # ตารางราคาขายต่อเมนู (มีหมวดหมู่ด้วย เช่น อาหารจานหลัก, เครื่องดื่ม)
-    cursor.execute("""
+    # ตารางราคาขายต่อเมนู (มีหมวดหมู่ + รูปภาพ)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS menu_prices (
             menu_name TEXT PRIMARY KEY,
             price REAL NOT NULL,
@@ -57,15 +65,14 @@ def init_db():
     """)
 
     # เผื่อฐานข้อมูลเก่าที่สร้างไว้ก่อนมีคอลัมน์ category/image ให้เติมให้อัตโนมัติ
-    cursor.execute("PRAGMA table_info(menu_prices)")
-    existing_columns = [row[1] for row in cursor.fetchall()]
+    existing_columns = [row[1] for row in conn.execute("PRAGMA table_info(menu_prices)").fetchall()]
     if "category" not in existing_columns:
-        cursor.execute("ALTER TABLE menu_prices ADD COLUMN category TEXT NOT NULL DEFAULT 'อื่นๆ'")
+        conn.execute("ALTER TABLE menu_prices ADD COLUMN category TEXT NOT NULL DEFAULT 'อื่นๆ'")
     if "image" not in existing_columns:
-        cursor.execute("ALTER TABLE menu_prices ADD COLUMN image BLOB")
+        conn.execute("ALTER TABLE menu_prices ADD COLUMN image BLOB")
 
-    # ตารางบันทึกการขายแยกรายเมนู (ใช้ทำกราฟเมนูขายดี Top 5)
-    cursor.execute("""
+    # ตารางบันทึกการขายแยกรายเมนู
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS sales_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             date TEXT NOT NULL,
@@ -76,7 +83,7 @@ def init_db():
     """)
 
     # ตารางออเดอร์จากลูกค้า (สแกน QR สั่งอาหาร)
-    cursor.execute("""
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             table_no TEXT NOT NULL,
@@ -86,7 +93,7 @@ def init_db():
     """)
 
     # ตารางรายการอาหารในแต่ละออเดอร์
-    cursor.execute("""
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS order_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             order_id INTEGER NOT NULL,
@@ -96,7 +103,6 @@ def init_db():
         )
     """)
 
-    # เดิมลืม commit/close ตรงนี้ ทำให้บางทีตารางไม่ถูกสร้างจริง
     conn.commit()
     conn.close()
 
@@ -105,8 +111,7 @@ def init_db():
 
 def add_transaction(trans_date, trans_type, category, amount, note):
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
+    conn.execute("""
         INSERT INTO transactions (date, type, category, amount, note)
         VALUES (?, ?, ?, ?, ?)
     """, (trans_date, trans_type, category, amount, note))
@@ -116,15 +121,14 @@ def add_transaction(trans_date, trans_type, category, amount, note):
 
 def get_all_transactions():
     conn = get_connection()
-    df = pd.read_sql_query("SELECT * FROM transactions ORDER BY date DESC", conn)
+    rows = conn.execute("SELECT id, date, type, category, amount, note FROM transactions ORDER BY date DESC").fetchall()
     conn.close()
-    return df
+    return pd.DataFrame(rows, columns=["id", "date", "type", "category", "amount", "note"])
 
 
 def delete_transaction(transaction_id):
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM transactions WHERE id = ?", (transaction_id,))
+    conn.execute("DELETE FROM transactions WHERE id = ?", (transaction_id,))
     conn.commit()
     conn.close()
 
@@ -137,9 +141,8 @@ def add_or_update_item(item_name, quantity, unit, low_stock_threshold, mode="add
     mode="set"  -> ตั้งยอดใหม่ทับของเดิมเลย (ใช้ตอนนับสต็อกจริงแล้วปรับให้ตรง)
     """
     conn = get_connection()
-    cursor = conn.cursor()
     if mode == "set":
-        cursor.execute("""
+        conn.execute("""
             INSERT INTO inventory (item_name, quantity, unit, low_stock_threshold)
             VALUES (?, ?, ?, ?)
             ON CONFLICT(item_name) DO UPDATE SET
@@ -148,7 +151,7 @@ def add_or_update_item(item_name, quantity, unit, low_stock_threshold, mode="add
                 low_stock_threshold = excluded.low_stock_threshold
         """, (item_name, quantity, unit, low_stock_threshold))
     else:
-        cursor.execute("""
+        conn.execute("""
             INSERT INTO inventory (item_name, quantity, unit, low_stock_threshold)
             VALUES (?, ?, ?, ?)
             ON CONFLICT(item_name) DO UPDATE SET
@@ -162,25 +165,25 @@ def add_or_update_item(item_name, quantity, unit, low_stock_threshold, mode="add
 
 def delete_inventory_item(item_name):
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM inventory WHERE item_name = ?", (item_name,))
+    conn.execute("DELETE FROM inventory WHERE item_name = ?", (item_name,))
     conn.commit()
     conn.close()
 
 
 def get_all_inventory():
     conn = get_connection()
-    df = pd.read_sql_query("SELECT * FROM inventory ORDER BY item_name", conn)
+    rows = conn.execute(
+        "SELECT id, item_name, quantity, unit, low_stock_threshold FROM inventory ORDER BY item_name"
+    ).fetchall()
     conn.close()
-    return df
+    return pd.DataFrame(rows, columns=["id", "item_name", "quantity", "unit", "low_stock_threshold"])
 
 
-# ---------------- Recipes (สูตรอาหาร) ----------------
+# ---------------- Recipes (สูตรอาหาร) — เก็บไว้เผื่อใช้ในอนาคต ----------------
 
 def add_recipe_item(menu_name, item_name, quantity_used):
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
+    conn.execute("""
         INSERT INTO recipes (menu_name, item_name, quantity_used)
         VALUES (?, ?, ?)
     """, (menu_name, item_name, quantity_used))
@@ -190,15 +193,16 @@ def add_recipe_item(menu_name, item_name, quantity_used):
 
 def get_all_recipes():
     conn = get_connection()
-    df = pd.read_sql_query("SELECT * FROM recipes ORDER BY menu_name", conn)
+    rows = conn.execute(
+        "SELECT id, menu_name, item_name, quantity_used FROM recipes ORDER BY menu_name"
+    ).fetchall()
     conn.close()
-    return df
+    return pd.DataFrame(rows, columns=["id", "menu_name", "item_name", "quantity_used"])
 
 
 def delete_recipe_item(recipe_id):
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
+    conn.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
     conn.commit()
     conn.close()
 
@@ -208,12 +212,9 @@ def delete_recipe_item(recipe_id):
 def set_menu_price(menu_name, price, category="อื่นๆ", image_bytes=None):
     """
     image_bytes: ถ้าไม่ส่งมา (None) จะไม่ไปทับรูปเดิมที่เคยอัปโหลดไว้
-    (เผื่อกรณีแก้แค่ราคา/หมวดหมู่ โดยไม่ได้อัปโหลดรูปใหม่)
     """
     conn = get_connection()
-    cursor = conn.cursor()
-    # เดิมสะกดผิดเป็น "ON CONFLTCT" ทำให้บันทึกสูตรอาหารไม่ได้เลย
-    cursor.execute("""
+    conn.execute("""
         INSERT INTO menu_prices (menu_name, price, category, image)
         VALUES (?, ?, ?, ?)
         ON CONFLICT(menu_name) DO UPDATE SET
@@ -226,19 +227,15 @@ def set_menu_price(menu_name, price, category="อื่นๆ", image_bytes=Non
 
 
 def get_all_categories():
-    """เอาไว้แนะนำหมวดหมู่ที่เคยใช้แล้ว ตอนกรอกฟอร์มเพิ่มเมนู"""
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT DISTINCT category FROM menu_prices ORDER BY category")
-    result = [row[0] for row in cursor.fetchall()]
+    rows = conn.execute("SELECT DISTINCT category FROM menu_prices ORDER BY category").fetchall()
     conn.close()
-    return result
+    return [row[0] for row in rows]
 
 
 def delete_menu_item(menu_name):
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM menu_prices WHERE menu_name = ?", (menu_name,))
+    conn.execute("DELETE FROM menu_prices WHERE menu_name = ?", (menu_name,))
     conn.commit()
     conn.close()
 
@@ -247,8 +244,7 @@ def delete_menu_item(menu_name):
 
 def add_sale_log(sale_date, menu_name, qty_sold, total_price):
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
+    conn.execute("""
         INSERT INTO sales_log (date, menu_name, qty_sold, total_price)
         VALUES (?, ?, ?, ?)
     """, (sale_date, menu_name, qty_sold, total_price))
@@ -258,32 +254,30 @@ def add_sale_log(sale_date, menu_name, qty_sold, total_price):
 
 def get_all_sales():
     conn = get_connection()
-    df = pd.read_sql_query("SELECT * FROM sales_log ORDER BY date DESC", conn)
+    rows = conn.execute(
+        "SELECT id, date, menu_name, qty_sold, total_price FROM sales_log ORDER BY date DESC"
+    ).fetchall()
     conn.close()
-    return df
+    return pd.DataFrame(rows, columns=["id", "date", "menu_name", "qty_sold", "total_price"])
 
 
 def get_menu_price(menu_name):
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT price FROM menu_prices WHERE menu_name = ?", (menu_name,))
-    result = cursor.fetchone()
+    result = conn.execute("SELECT price FROM menu_prices WHERE menu_name = ?", (menu_name,)).fetchone()
     conn.close()
     return result[0] if result else 0
 
 
 def sell_menu(menu_name, qty_sold):
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
+    ingredients = conn.execute(
         "SELECT item_name, quantity_used FROM recipes WHERE menu_name = ?",
         (menu_name,)
-    )
-    ingredients = cursor.fetchall()
+    ).fetchall()
 
     for item_name, qty_per_dish in ingredients:
         total_used = qty_per_dish * qty_sold
-        cursor.execute(
+        conn.execute(
             "UPDATE inventory SET quantity = quantity - ? WHERE item_name = ?",
             (total_used, item_name)
         )
@@ -293,11 +287,13 @@ def sell_menu(menu_name, qty_sold):
 
 
 def get_menu_list():
-    """เอาไว้แสดงเมนู+ราคาให้ลูกค้าดูตอนสั่งอาหารผ่าน QR"""
+    """เอาไว้แสดงเมนู+ราคา+รูปให้ลูกค้าดูตอนสั่งอาหารผ่าน QR"""
     conn = get_connection()
-    df = pd.read_sql_query("SELECT * FROM menu_prices ORDER BY menu_name", conn)
+    rows = conn.execute(
+        "SELECT menu_name, price, category, image FROM menu_prices ORDER BY menu_name"
+    ).fetchall()
     conn.close()
-    return df
+    return pd.DataFrame(rows, columns=["menu_name", "price", "category", "image"])
 
 
 # ---------------- Orders (สั่งอาหารผ่าน QR) ----------------
@@ -305,15 +301,14 @@ def get_menu_list():
 def create_order(table_no, items):
     """items คือ list ของ (menu_name, qty, price)"""
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
+    conn.execute(
         "INSERT INTO orders (table_no, created_at, status) VALUES (?, ?, ?)",
         (table_no, str(datetime.now()), "รอทำ")
     )
-    order_id = cursor.lastrowid
+    order_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
     for menu_name, qty, price in items:
-        cursor.execute(
+        conn.execute(
             "INSERT INTO order_items (order_id, menu_name, qty, price) VALUES (?, ?, ?, ?)",
             (order_id, menu_name, qty, price)
         )
@@ -324,41 +319,40 @@ def create_order(table_no, items):
 
 def get_active_orders():
     conn = get_connection()
-    df = pd.read_sql_query(
-        "SELECT * FROM orders WHERE status != 'เสร็จแล้ว' ORDER BY created_at ASC", conn
-    )
+    rows = conn.execute(
+        "SELECT id, table_no, created_at, status FROM orders WHERE status != 'เสร็จแล้ว' ORDER BY created_at ASC"
+    ).fetchall()
     conn.close()
-    return df
+    return pd.DataFrame(rows, columns=["id", "table_no", "created_at", "status"])
 
 
 def get_order_items(order_id):
     conn = get_connection()
-    df = pd.read_sql_query(
-        "SELECT * FROM order_items WHERE order_id = ?", conn, params=(order_id,)
-    )
+    rows = conn.execute(
+        "SELECT id, order_id, menu_name, qty, price FROM order_items WHERE order_id = ?", (order_id,)
+    ).fetchall()
     conn.close()
-    return df
+    return pd.DataFrame(rows, columns=["id", "order_id", "menu_name", "qty", "price"])
 
 
 def get_active_order_items_by_table(table_no):
     """รวมรายการอาหารจากทุกออเดอร์ที่ยังไม่เสร็จของโต๊ะนั้น (เผื่อลูกค้าสั่งหลายรอบ) เอาไว้ทำสรุปยอด"""
     conn = get_connection()
-    df = pd.read_sql_query(
+    rows = conn.execute(
         """
         SELECT oi.menu_name, oi.qty, oi.price
         FROM order_items oi
         JOIN orders o ON oi.order_id = o.id
         WHERE o.table_no = ? AND o.status != 'เสร็จแล้ว'
         """,
-        conn, params=(table_no,)
-    )
+        (table_no,)
+    ).fetchall()
     conn.close()
-    return df
+    return pd.DataFrame(rows, columns=["menu_name", "qty", "price"])
 
 
 def update_order_status(order_id, status):
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE orders SET status = ? WHERE id = ?", (status, order_id))
+    conn.execute("UPDATE orders SET status = ? WHERE id = ?", (status, order_id))
     conn.commit()
     conn.close()
