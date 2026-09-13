@@ -140,10 +140,16 @@ if query_params.get("page") == "order":
 #   [[users]]
 #   username = "kitchen1"
 #   password = "1234"
-#   role = "staff"       # เห็นแค่หน้าครัวกับขายเมนู
+#   role = "staff"       # เห็นแค่หน้าครัว
+#
+#   [[users]]
+#   username = "cashier1"
+#   password = "5678"
+#   role = "cashier"     # เห็นแค่หน้าสรุปยอดต่อโต๊ะ (ดูอย่างเดียว ไม่มีปุ่มกด)
 DEFAULT_USERS = [
     {"username": "MSAN", "password": "8899M", "role": "owner"},
     {"username": "kitchen1", "password": "1234", "role": "staff"},
+    {"username": "cashier1", "password": "5678", "role": "cashier"},
 ]
 USERS = st.secrets.get("users", DEFAULT_USERS)
 
@@ -182,11 +188,22 @@ OWNER_PAGES = [
     "🍽️ เมนูอาหาร",
     "📊 รายงานยอดขาย",
     "👨‍🍳 ครัว (ออเดอร์)",
+    "🧾 สรุปยอดต่อโต๊ะ",
     "📱 QR สั่งอาหาร",
 ]
 STAFF_PAGES = [
     "👨‍🍳 ครัว (ออเดอร์)",
 ]
+CASHIER_PAGES = [
+    "🧾 สรุปยอดต่อโต๊ะ",
+]
+
+if USER_ROLE == "owner":
+    ROLE_PAGES = OWNER_PAGES
+elif USER_ROLE == "cashier":
+    ROLE_PAGES = CASHIER_PAGES
+else:
+    ROLE_PAGES = STAFF_PAGES
 
 # ---------------- Sidebar: โลโก้ + ชื่อร้าน + เมนูนำทาง ----------------
 with st.sidebar:
@@ -196,13 +213,13 @@ with st.sidebar:
         st.markdown(f"<div style='font-size:60px; text-align:center'>{LOGO_EMOJI}</div>", unsafe_allow_html=True)
 
     st.markdown(f"<h3 style='text-align:center'>{RESTAURANT_NAME}</h3>", unsafe_allow_html=True)
-    role_label = "เจ้าของร้าน" if USER_ROLE == "owner" else "พนักงานครัว"
+    role_label = {"owner": "เจ้าของร้าน", "cashier": "แคชเชียร์", "staff": "พนักงานครัว"}.get(USER_ROLE, "พนักงาน")
     st.caption(f"👤 เข้าสู่ระบบในบทบาท: {role_label}")
     st.divider()
 
     page = st.radio(
         "เมนู",
-        OWNER_PAGES if USER_ROLE == "owner" else STAFF_PAGES,
+        ROLE_PAGES,
         label_visibility="collapsed",
     )
 
@@ -515,10 +532,19 @@ elif page == "👨‍🍳 ครัว (ออเดอร์)":
                     print_kitchen_ticket(order, items_df)
                     st.session_state[f"show_print_{order['id']}"] = False
 
-        st.divider()
-        st.subheader("🧾 สรุปยอดต่อโต๊ะ (เอาไว้ดูตอนคีย์เข้า PakeySoft)")
-        st.caption("รวมทุกออเดอร์ที่ยังไม่เสร็จของโต๊ะนั้นเป็นยอดเดียว ไม่ใช่ใบเสร็จ/ใบกำกับภาษี แค่ไว้ดูสรุปก่อนคีย์บิลจริง")
+# ================= หน้า: สรุปยอดต่อโต๊ะ (สำหรับแคชเชียร์) =================
+elif page == "🧾 สรุปยอดต่อโต๊ะ":
+    st.header("🧾 สรุปยอดต่อโต๊ะ")
+    st.caption("รวมทุกออเดอร์ที่ยังไม่เสร็จของโต๊ะนั้นเป็นยอดเดียว ไว้ดูตอนคีย์เข้า PakeySoft เพื่อออกบิล — ไม่ใช่ใบเสร็จ/ใบกำกับภาษี")
 
+    if st.button("🔄 รีเฟรช"):
+        st.rerun()
+
+    active_orders = get_active_orders()
+
+    if active_orders.empty:
+        st.info("ยังไม่มีโต๊ะที่มีออเดอร์ค้างอยู่ตอนนี้")
+    else:
         table_numbers = sorted(active_orders["table_no"].unique(), key=str)
         for t_no in table_numbers:
             table_items_df = get_active_order_items_by_table(t_no)
@@ -533,7 +559,7 @@ elif page == "👨‍🍳 ครัว (ออเดอร์)":
             )
             grand_total = grouped["รวม"].sum()
 
-            with st.expander(f"โต๊ะ {t_no} — ยอดรวม {grand_total:,.0f} บาท"):
+            with st.expander(f"โต๊ะ {t_no} — ยอดรวม {grand_total:,.0f} บาท", expanded=True):
                 st.dataframe(grouped, use_container_width=True, hide_index=True)
                 st.markdown(f"### รวมทั้งหมด: {grand_total:,.0f} บาท")
 
