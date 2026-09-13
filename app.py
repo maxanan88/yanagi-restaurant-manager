@@ -23,7 +23,13 @@ APP_BASE_URL = "https://yanagi-restaurant-manager-mkxtzbrcydnej88qoxmufi.streaml
 
 st.set_page_config(page_title=f"ระบบจัดการร้านอาหาร - {RESTAURANT_NAME}", page_icon=LOGO_EMOJI, layout="wide")
 
-init_db()
+@st.cache_resource
+def _init_db_once():
+    init_db()
+    return True
+
+
+_init_db_once()
 
 
 def complete_order(order_id, table_no):
