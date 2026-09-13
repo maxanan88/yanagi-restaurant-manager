@@ -51,15 +51,18 @@ def init_db():
         CREATE TABLE IF NOT EXISTS menu_prices (
             menu_name TEXT PRIMARY KEY,
             price REAL NOT NULL,
-            category TEXT NOT NULL DEFAULT 'อื่นๆ'
+            category TEXT NOT NULL DEFAULT 'อื่นๆ',
+            image BLOB
         )
     """)
 
-    # เผื่อฐานข้อมูลเก่าที่สร้างไว้ก่อนมีคอลัมน์ category ให้เติมให้อัตโนมัติ
+    # เผื่อฐานข้อมูลเก่าที่สร้างไว้ก่อนมีคอลัมน์ category/image ให้เติมให้อัตโนมัติ
     cursor.execute("PRAGMA table_info(menu_prices)")
     existing_columns = [row[1] for row in cursor.fetchall()]
     if "category" not in existing_columns:
         cursor.execute("ALTER TABLE menu_prices ADD COLUMN category TEXT NOT NULL DEFAULT 'อื่นๆ'")
+    if "image" not in existing_columns:
+        cursor.execute("ALTER TABLE menu_prices ADD COLUMN image BLOB")
 
     # ตารางบันทึกการขายแยกรายเมนู (ใช้ทำกราฟเมนูขายดี Top 5)
     cursor.execute("""
@@ -202,17 +205,22 @@ def delete_recipe_item(recipe_id):
 
 # ---------------- Menu price + selling ----------------
 
-def set_menu_price(menu_name, price, category="อื่นๆ"):
+def set_menu_price(menu_name, price, category="อื่นๆ", image_bytes=None):
+    """
+    image_bytes: ถ้าไม่ส่งมา (None) จะไม่ไปทับรูปเดิมที่เคยอัปโหลดไว้
+    (เผื่อกรณีแก้แค่ราคา/หมวดหมู่ โดยไม่ได้อัปโหลดรูปใหม่)
+    """
     conn = get_connection()
     cursor = conn.cursor()
     # เดิมสะกดผิดเป็น "ON CONFLTCT" ทำให้บันทึกสูตรอาหารไม่ได้เลย
     cursor.execute("""
-        INSERT INTO menu_prices (menu_name, price, category)
-        VALUES (?, ?, ?)
+        INSERT INTO menu_prices (menu_name, price, category, image)
+        VALUES (?, ?, ?, ?)
         ON CONFLICT(menu_name) DO UPDATE SET
             price = excluded.price,
-            category = excluded.category
-    """, (menu_name, price, category))
+            category = excluded.category,
+            image = COALESCE(excluded.image, menu_prices.image)
+    """, (menu_name, price, category, image_bytes))
     conn.commit()
     conn.close()
 
