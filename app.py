@@ -4,12 +4,13 @@ import io
 import streamlit as st
 import pandas as pd
 import qrcode
+import streamlit.components.v1 as components
 from PIL import Image
 from database import (
     init_db, add_or_update_item, delete_inventory_item, get_all_inventory,
     set_menu_price, get_menu_list, get_all_categories, delete_menu_item,
     add_sale_log, get_all_sales,
-    create_order, get_active_orders, get_order_items, update_order_status
+    create_order, get_active_orders, get_order_items, get_active_order_items_by_table, update_order_status
 )
 
 # ---------------- ตั้งค่าร้าน (แก้ตรงนี้ให้เป็นร้านของพี่ได้เลย) ----------------
@@ -33,6 +34,44 @@ def complete_order(order_id, table_no):
         line_total = item["qty"] * item["price"]
         add_sale_log(sale_time, item["menu_name"], int(item["qty"]), line_total)
     update_order_status(order_id, "เสร็จแล้ว")
+
+
+def print_kitchen_ticket(order_row, items_df):
+    """เปิดหน้าต่างพิมพ์ (ผ่านเบราว์เซอร์) เป็นใบสั่งอาหารขนาดกระดาษม้วน 80mm ให้ครัว
+    หมายเหตุ: เครื่องพิมพ์ใบเสร็จต้องติดตั้งเป็นเครื่องพิมพ์ปกติบนเครื่องที่เปิดหน้านี้อยู่ก่อน"""
+    rows_html = "".join(
+        f"<tr><td>{r['menu_name']}</td><td style='text-align:right; white-space:nowrap'>x{int(r['qty'])}</td></tr>"
+        for _, r in items_df.iterrows()
+    )
+    html = f"""
+    <html>
+    <head>
+    <style>
+        @media print {{
+            @page {{ size: 80mm auto; margin: 2mm; }}
+        }}
+        body {{ font-family: sans-serif; width: 74mm; margin: 0 auto; font-size: 15px; }}
+        h2 {{ text-align: center; margin: 4px 0; }}
+        .meta {{ font-size: 13px; margin-bottom: 6px; text-align: center; }}
+        hr {{ border: none; border-top: 1px dashed #000; margin: 6px 0; }}
+        table {{ width: 100%; border-collapse: collapse; }}
+        td {{ padding: 3px 0; border-bottom: 1px dashed #000; font-size: 15px; }}
+    </style>
+    </head>
+    <body onload="window.print()">
+        <h2>{RESTAURANT_NAME}</h2>
+        <div class="meta">ใบสั่งอาหาร (ครัว)</div>
+        <hr>
+        <div class="meta" style="text-align:left; font-size:15px; font-weight:bold">
+            โต๊ะ {order_row['table_no']} — ออเดอร์ #{order_row['id']}
+        </div>
+        <div class="meta" style="text-align:left">{order_row['created_at']}</div>
+        <hr>
+        <table>{rows_html}</table>
+    </body>
+    </html>
+    """
+    components.html(html, height=0, width=0)
 
 
 # ================= หน้าสั่งอาหารสำหรับลูกค้า (ไม่ต้อง login) =================
@@ -457,7 +496,7 @@ elif page == "👨‍🍳 ครัว (ออเดอร์)":
                 st.caption(order["created_at"])
                 st.dataframe(items_df[["menu_name", "qty", "price"]], use_container_width=True)
 
-                col1, col2 = st.columns(2)
+                col1, col2, col3 = st.columns(3)
                 with col1:
                     if order["status"] == "รอทำ":
                         if st.button("👨‍🍳 เริ่มทำ", key=f"start_{order['id']}"):
@@ -468,6 +507,35 @@ elif page == "👨‍🍳 ครัว (ออเดอร์)":
                         complete_order(order["id"], order["table_no"])
                         st.success(f"ปิดออเดอร์โต๊ะ {order['table_no']} เรียบร้อย! ✅")
                         st.rerun()
+                with col3:
+                    if st.button("🖨️ พิมพ์ใบสั่ง", key=f"print_{order['id']}"):
+                        st.session_state[f"show_print_{order['id']}"] = True
+
+                if st.session_state.get(f"show_print_{order['id']}"):
+                    print_kitchen_ticket(order, items_df)
+                    st.session_state[f"show_print_{order['id']}"] = False
+
+        st.divider()
+        st.subheader("🧾 สรุปยอดต่อโต๊ะ (เอาไว้ดูตอนคีย์เข้า PakeySoft)")
+        st.caption("รวมทุกออเดอร์ที่ยังไม่เสร็จของโต๊ะนั้นเป็นยอดเดียว ไม่ใช่ใบเสร็จ/ใบกำกับภาษี แค่ไว้ดูสรุปก่อนคีย์บิลจริง")
+
+        table_numbers = sorted(active_orders["table_no"].unique(), key=str)
+        for t_no in table_numbers:
+            table_items_df = get_active_order_items_by_table(t_no)
+            if table_items_df.empty:
+                continue
+            table_items_df["ยอดรวมรายการ"] = table_items_df["qty"] * table_items_df["price"]
+            grouped = (
+                table_items_df.groupby(["menu_name", "price"])
+                .agg(qty=("qty", "sum"), รวม=("ยอดรวมรายการ", "sum"))
+                .reset_index()
+                .rename(columns={"menu_name": "เมนู", "price": "ราคา/หน่วย", "qty": "จำนวน"})
+            )
+            grand_total = grouped["รวม"].sum()
+
+            with st.expander(f"โต๊ะ {t_no} — ยอดรวม {grand_total:,.0f} บาท"):
+                st.dataframe(grouped, use_container_width=True, hide_index=True)
+                st.markdown(f"### รวมทั้งหมด: {grand_total:,.0f} บาท")
 
 # ================= หน้า: QR สั่งอาหาร =================
 elif page == "📱 QR สั่งอาหาร":
