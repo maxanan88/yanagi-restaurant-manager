@@ -4,6 +4,7 @@ import io
 import streamlit as st
 import pandas as pd
 import qrcode
+from PIL import Image
 from database import (
     init_db, add_or_update_item, delete_inventory_item, get_all_inventory,
     set_menu_price, get_menu_list, get_all_categories, delete_menu_item,
@@ -54,10 +55,20 @@ if query_params.get("page") == "order":
             for category_name, group_df in menu_df.groupby("category"):
                 st.markdown(f"**🍽️ {category_name}**")
                 for _, row in group_df.iterrows():
-                    qty_inputs[row["menu_name"]] = st.number_input(
-                        f"{row['menu_name']} ({row['price']:,.0f} บาท)",
-                        min_value=0, step=1, key=f"cust_qty_{row['menu_name']}"
-                    )
+                    col_img, col_info = st.columns([1, 3])
+                    with col_img:
+                        if "image" in row and row["image"] is not None:
+                            st.image(row["image"], width=110)
+                        else:
+                            st.markdown(
+                                "<div style='font-size:44px; text-align:center'>🍽️</div>",
+                                unsafe_allow_html=True,
+                            )
+                    with col_info:
+                        qty_inputs[row["menu_name"]] = st.number_input(
+                            f"{row['menu_name']} ({row['price']:,.0f} บาท)",
+                            min_value=0, step=1, key=f"cust_qty_{row['menu_name']}"
+                        )
 
             submitted_order = st.form_submit_button("🛒 สั่งอาหาร")
 
@@ -257,22 +268,137 @@ elif page == "🍽️ เมนูอาหาร":
 
         price = st.number_input("ราคาขาย (บาท)", min_value=0.0, step=1.0)
 
+        uploaded_image = st.file_uploader(
+            "รูปเมนู (ไม่บังคับ — ถ้าไม่อัปโหลดใหม่ จะใช้รูปเดิมที่เคยอัปโหลดไว้)",
+            type=["png", "jpg", "jpeg"],
+        )
+
         submitted_menu = st.form_submit_button("➕ เพิ่ม/อัปเดตเมนู")
         if submitted_menu:
             final_category = new_category_input.strip() if category_choice == "+ เพิ่มหมวดหมู่ใหม่" else category_choice
             if menu_name and final_category:
-                set_menu_price(menu_name, price, final_category)
+                image_bytes = None
+                if uploaded_image is not None:
+                    img = Image.open(uploaded_image)
+                    img.thumbnail((600, 600))  # ย่อรูปให้ไม่ใหญ่เกินไป โหลดเร็วขึ้น
+                    img_buf = io.BytesIO()
+                    img.convert("RGB").save(img_buf, format="JPEG", quality=85)
+                    image_bytes = img_buf.getvalue()
+                set_menu_price(menu_name, price, final_category, image_bytes)
                 st.success(f"บันทึกเมนู '{menu_name}' (หมวด {final_category}) เรียบร้อยแล้ว! ✅")
                 st.rerun()
             else:
                 st.error("กรุณากรอกชื่อเมนูและหมวดหมู่ให้ครบ")
+
+    st.divider()
+    with st.expander("📥 นำเข้าเมนูจำนวนมาก (เหมาะกับตอนมีเมนูเยอะๆ เช่น 100 รายการ)"):
+        st.markdown("**ขั้นตอนที่ 1: นำเข้าชื่อเมนู + หมวดหมู่ + ราคา จากไฟล์ Excel/CSV**")
+
+        template_df = pd.DataFrame({
+            "ชื่อเมนู": ["ผัดกะเพราหมู", "ต้มยำกุ้ง"],
+            "หมวดหมู่": ["อาหารจานหลัก", "อาหารจานหลัก"],
+            "ราคา": [60, 120],
+        })
+        template_buf = io.BytesIO()
+        template_df.to_csv(template_buf, index=False, encoding="utf-8-sig")
+        st.download_button(
+            "⬇️ ดาวน์โหลดไฟล์ตัวอย่าง (CSV)",
+            data=template_buf.getvalue(),
+            file_name="ตัวอย่างเมนู.csv",
+            mime="text/csv",
+        )
+        st.caption("เปิดไฟล์นี้ด้วย Excel แล้วพิมพ์รายการเมนูทั้งหมดต่อจากตัวอย่างได้เลย (คอลัมน์ต้องชื่อ ชื่อเมนู, หมวดหมู่, ราคา เป๊ะๆ) แล้วค่อยอัปโหลดกลับเข้ามา จะเซฟเป็น .csv หรือ .xlsx ก็ได้")
+
+        bulk_menu_file = st.file_uploader(
+            "อัปโหลดไฟล์เมนู (.csv หรือ .xlsx)",
+            type=["csv", "xlsx"],
+            key="bulk_menu_file",
+        )
+        if bulk_menu_file is not None:
+            try:
+                if bulk_menu_file.name.endswith(".csv"):
+                    bulk_df = pd.read_csv(bulk_menu_file)
+                else:
+                    bulk_df = pd.read_excel(bulk_menu_file)
+
+                required_cols = {"ชื่อเมนู", "หมวดหมู่", "ราคา"}
+                if not required_cols.issubset(set(bulk_df.columns)):
+                    st.error(f"ไฟล์ต้องมีคอลัมน์: {', '.join(required_cols)}")
+                else:
+                    st.dataframe(bulk_df, use_container_width=True)
+                    if st.button("📥 นำเข้าเมนูทั้งหมดนี้"):
+                        imported_count = 0
+                        for _, bulk_row in bulk_df.iterrows():
+                            row_name = str(bulk_row["ชื่อเมนู"]).strip()
+                            row_category = str(bulk_row["หมวดหมู่"]).strip()
+                            try:
+                                row_price = float(bulk_row["ราคา"])
+                            except (ValueError, TypeError):
+                                continue
+                            if row_name and row_category:
+                                set_menu_price(row_name, row_price, row_category)
+                                imported_count += 1
+                        st.success(f"นำเข้าเมนูสำเร็จ {imported_count} รายการ ✅")
+                        st.rerun()
+            except Exception as e:
+                st.error(f"อ่านไฟล์ไม่สำเร็จ: {e}")
+
+        st.markdown("---")
+        st.markdown("**ขั้นตอนที่ 2: อัปโหลดรูปเมนูทีละหลายไฟล์พร้อมกัน**")
+        st.caption(
+            "ตั้งชื่อไฟล์รูปให้ตรงกับชื่อเมนูที่นำเข้าไว้แล้วเป๊ะๆ เช่น เมนูชื่อ 'ผัดกะเพราหมู' "
+            "ให้ตั้งชื่อไฟล์เป็น ผัดกะเพราหมู.jpg ระบบจะจับคู่ชื่อไฟล์กับชื่อเมนูให้อัตโนมัติ "
+            "(ทำขั้นตอนที่ 1 ให้เสร็จก่อน เมนูต้องมีอยู่ในระบบแล้วถึงจะจับคู่ใส่รูปได้)"
+        )
+
+        bulk_images = st.file_uploader(
+            "เลือกรูปเมนูได้หลายไฟล์พร้อมกัน",
+            type=["png", "jpg", "jpeg"],
+            accept_multiple_files=True,
+            key="bulk_images",
+        )
+        if bulk_images:
+            if st.button("📥 นำเข้ารูปเมนูทั้งหมดนี้"):
+                current_menu_df = get_menu_list()
+                existing_menu_names = set(current_menu_df["menu_name"])
+                matched_count = 0
+                unmatched_files = []
+                for img_file in bulk_images:
+                    file_menu_name = os.path.splitext(img_file.name)[0].strip()
+                    if file_menu_name in existing_menu_names:
+                        img = Image.open(img_file)
+                        img.thumbnail((600, 600))
+                        img_buf = io.BytesIO()
+                        img.convert("RGB").save(img_buf, format="JPEG", quality=85)
+                        matched_row = current_menu_df[current_menu_df["menu_name"] == file_menu_name].iloc[0]
+                        set_menu_price(file_menu_name, matched_row["price"], matched_row["category"], img_buf.getvalue())
+                        matched_count += 1
+                    else:
+                        unmatched_files.append(img_file.name)
+                st.success(f"อัปโหลดรูปสำเร็จ {matched_count} รูป ✅")
+                if unmatched_files:
+                    st.warning("ไฟล์ที่ชื่อไม่ตรงกับเมนูไหนเลย (ไม่ได้นำเข้า): " + ", ".join(unmatched_files))
+                st.rerun()
 
     menu_list_df = get_menu_list()
     if menu_list_df.empty:
         st.info("ยังไม่มีเมนูในระบบ")
     else:
         st.subheader("📋 เมนูทั้งหมด")
-        st.dataframe(menu_list_df, use_container_width=True)
+        st.dataframe(menu_list_df.drop(columns=["image"]), use_container_width=True)
+
+        st.subheader("📷 รูปเมนู")
+        gallery_cols = st.columns(4)
+        for i, (_, row) in enumerate(menu_list_df.iterrows()):
+            with gallery_cols[i % 4]:
+                if row["image"] is not None:
+                    st.image(row["image"], use_container_width=True)
+                else:
+                    st.markdown(
+                        "<div style='font-size:44px; text-align:center'>🍽️</div>",
+                        unsafe_allow_html=True,
+                    )
+                st.caption(row["menu_name"])
 
         st.subheader("🗑️ ลบเมนู")
         selected_menu_to_delete = st.selectbox(
