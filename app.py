@@ -5,7 +5,7 @@ import streamlit as st
 import pandas as pd
 import qrcode
 from database import (
-    init_db, add_or_update_item, get_all_inventory,
+    init_db, add_or_update_item, delete_inventory_item, get_all_inventory,
     set_menu_price, get_menu_list, get_all_categories, delete_menu_item,
     add_sale_log, get_all_sales,
     create_order, get_active_orders, get_order_items, update_order_status
@@ -15,6 +15,9 @@ from database import (
 RESTAURANT_NAME = "YANAGI"
 LOGO_EMOJI = "🍽️"
 LOGO_PATH = "logo.png"  # ถ้ามีไฟล์รูปโลโก้จริง วางไว้โฟลเดอร์เดียวกับ app.py แล้วตั้งชื่อ logo.png
+
+# URL จริงของแอปตัวนี้ (ตั้งไว้ล่วงหน้า จะได้ไม่ต้องพิมพ์เองทุกครั้งตอนสร้าง QR)
+APP_BASE_URL = "https://yanagi-restaurant-manager-mkxtzbrcydnej88qoxmufi.streamlit.app"
 
 st.set_page_config(page_title=f"ระบบจัดการร้านอาหาร - {RESTAURANT_NAME}", page_icon=LOGO_EMOJI, layout="wide")
 
@@ -189,19 +192,27 @@ if page == "🏠 หน้าหลัก":
 elif page == "📦 สต็อกวัตถุดิบ":
     st.header("📦 จัดการวัตถุดิบคงคลัง")
 
+    update_mode_label = st.radio(
+        "โหมดการกรอก",
+        ["➕ เพิ่มของเข้าสต็อก (ของเข้าใหม่ บวกเพิ่มจากของเดิม)", "✏️ ปรับยอดให้ตรง (นับสต็อกจริงแล้วตั้งค่าใหม่ทับของเดิม)"],
+        help="เลือก 'เพิ่มของเข้าสต็อก' เวลาซื้อของเข้ามาเติม หรือเลือก 'ปรับยอดให้ตรง' เวลานับสต็อกจริงแล้วอยากตั้งตัวเลขให้ตรงกับที่นับได้",
+    )
+    update_mode = "set" if update_mode_label.startswith("✏️") else "add"
+    quantity_field_label = "จำนวนที่นับได้จริง (ยอดใหม่ทั้งหมด)" if update_mode == "set" else "จำนวนที่เพิ่มเข้ามา"
+
     with st.form("inventory_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
             item_name = st.text_input("ชื่อวัตถุดิบ")
-            quantity = st.number_input("จำนวนที่เพิ่ม", min_value=0.0, step=1.0)
+            quantity = st.number_input(quantity_field_label, min_value=0.0, step=1.0)
         with col2:
             unit = st.text_input("หน่วย (เช่น กก., ฟอง, ลิตร)")
             threshold = st.number_input("จุดแจ้งเตือนของใกล้หมด", min_value=0.0, step=1.0)
 
-        submitted_item = st.form_submit_button("📥 เพิ่ม/อัปเดตวัตถุดิบ")
+        submitted_item = st.form_submit_button("📥 บันทึกวัตถุดิบ")
         if submitted_item:
             if item_name and unit:
-                add_or_update_item(item_name, quantity, unit, threshold)
+                add_or_update_item(item_name, quantity, unit, threshold, mode=update_mode)
                 st.success(f"อัปเดตวัตถุดิบ '{item_name}' เรียบร้อยแล้ว! ✅")
                 st.rerun()
             else:
@@ -219,6 +230,15 @@ elif page == "📦 สต็อกวัตถุดิบ":
 
         st.subheader("📋 รายการวัตถุดิบทั้งหมด")
         st.dataframe(inventory_df, use_container_width=True)
+
+        st.subheader("🗑️ ลบวัตถุดิบ")
+        selected_item_to_delete = st.selectbox(
+            "เลือกวัตถุดิบที่จะลบ", inventory_df["item_name"].unique(), key="delete_inventory_select"
+        )
+        if st.button("🗑️ ลบวัตถุดิบนี้"):
+            delete_inventory_item(selected_item_to_delete)
+            st.success(f"ลบวัตถุดิบ '{selected_item_to_delete}' เรียบร้อยแล้ว! ✅")
+            st.rerun()
 
 # ================= หน้า: เมนูอาหาร =================
 elif page == "🍽️ เมนูอาหาร":
@@ -330,8 +350,12 @@ elif page == "📱 QR สั่งอาหาร":
 
     base_url = st.text_input(
         "ที่อยู่เว็บของร้าน (Base URL)",
-        placeholder="เช่น https://yanagi-restaurant-manager-xxxxx.streamlit.app",
+        value=APP_BASE_URL,
+        help="ตั้งไว้ล่วงหน้าให้แล้วตาม URL จริงของแอป ปกติไม่ต้องแก้ เว้นแต่ย้ายไปโฮสต์ที่อื่น",
     )
+
+    st.divider()
+    st.subheader("🔲 สร้าง QR ทีละโต๊ะ")
     table_number = st.text_input("หมายเลขโต๊ะ", value="1")
 
     if st.button("🔲 สร้าง QR โค้ด"):
@@ -349,5 +373,37 @@ elif page == "📱 QR สั่งอาหาร":
                 "⬇️ ดาวน์โหลด QR",
                 data=buf.getvalue(),
                 file_name=f"qr_table_{table_number}.png",
-                mime="image/png"
+                mime="image/png",
+                key="dl_single_qr",
             )
+
+    st.divider()
+    st.subheader("🔲 สร้าง QR หลายโต๊ะพร้อมกัน")
+    col_a, col_b = st.columns(2)
+    with col_a:
+        start_table = st.number_input("โต๊ะเริ่มต้น", min_value=1, step=1, value=1)
+    with col_b:
+        end_table = st.number_input("โต๊ะสุดท้าย", min_value=1, step=1, value=10)
+
+    if st.button("🔲 สร้าง QR ทุกโต๊ะ"):
+        if not base_url:
+            st.error("กรุณากรอกที่อยู่เว็บก่อน")
+        elif end_table < start_table:
+            st.error("โต๊ะสุดท้ายต้องมากกว่าหรือเท่ากับโต๊ะเริ่มต้น")
+        else:
+            table_numbers = list(range(int(start_table), int(end_table) + 1))
+            cols = st.columns(4)
+            for i, t_no in enumerate(table_numbers):
+                order_url = f"{base_url.rstrip('/')}/?page=order&table={t_no}"
+                qr_img = qrcode.make(order_url)
+                buf = io.BytesIO()
+                qr_img.save(buf, format="PNG")
+                with cols[i % 4]:
+                    st.image(buf.getvalue(), caption=f"โต๊ะ {t_no}", use_container_width=True)
+                    st.download_button(
+                        "⬇️ ดาวน์โหลด",
+                        data=buf.getvalue(),
+                        file_name=f"qr_table_{t_no}.png",
+                        mime="image/png",
+                        key=f"dl_qr_{t_no}",
+                    )
