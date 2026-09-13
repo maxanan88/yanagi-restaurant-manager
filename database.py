@@ -316,3 +316,11 @@ def update_order_status(order_id, status):
     cursor.execute("UPDATE orders SET status = ? WHERE id = ?", (status, order_id))
     conn.commit()
     conn.close()
+
+
+def delete_menu_item(menu_name):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM menu_prices WHERE menu_name = ?", (menu_name,))
+    conn.commit()
+    conn.close()
