@@ -1,14 +1,13 @@
-from datetime import date, timedelta, datetime
+from datetime import datetime
 import os
 import io
 import streamlit as st
 import pandas as pd
 import qrcode
 from database import (
-    init_db, add_transaction, get_all_transactions, delete_transaction,
-    add_or_update_item, get_all_inventory, add_recipe_item, get_all_recipes,
-    delete_recipe_item, sell_menu, set_menu_price, get_menu_price,
-    add_sale_log, get_all_sales, get_menu_list, get_all_categories,
+    init_db, add_or_update_item, get_all_inventory,
+    set_menu_price, get_menu_list, get_all_categories, delete_menu_item,
+    add_sale_log, get_all_sales,
     create_order, get_active_orders, get_order_items, update_order_status
 )
 
@@ -23,16 +22,12 @@ init_db()
 
 
 def complete_order(order_id, table_no):
-    """ตอนกด 'เสร็จแล้ว' ในหน้าครัว: ตัดสต็อกวัตถุดิบ + บันทึกยอดขายให้อัตโนมัติ"""
+    """ตอนกด 'เสร็จแล้ว' ในหน้าครัว: บันทึกลงรายงานยอดขายเท่านั้น (สต็อกจัดการแยกต่างหาก)"""
     items_df = get_order_items(order_id)
     sale_time = str(datetime.now())
-    total = 0
     for _, item in items_df.iterrows():
-        sell_menu(item["menu_name"], int(item["qty"]))
         line_total = item["qty"] * item["price"]
-        total += line_total
         add_sale_log(sale_time, item["menu_name"], int(item["qty"]), line_total)
-    add_transaction(sale_time, "income", "ขายอาหาร", total, f"ออเดอร์โต๊ะ {table_no} (สแกน QR)")
     update_order_status(order_id, "เสร็จแล้ว")
 
 
@@ -126,19 +121,18 @@ if not st.session_state.logged_in:
 USER_ROLE = st.session_state.get("role", "staff")
 
 # หน้าที่แต่ละบทบาทเห็นได้
+# (ตัด "การเงิน" กับ "ขายเมนู" ออก เพราะร้านใช้ Pakey จัดการเรื่องเงิน/บิล/VAT อยู่แล้ว
+#  ระบบนี้ทำหน้าที่แค่ QR สั่งอาหาร + ครัว + สต็อกวัตถุดิบเท่านั้น)
 OWNER_PAGES = [
     "🏠 หน้าหลัก",
-    "📝 การเงิน",
     "📦 สต็อกวัตถุดิบ",
-    "🍳 สูตรอาหาร",
-    "🧾 ขายเมนู",
+    "🍽️ เมนูอาหาร",
     "📊 รายงานยอดขาย",
     "👨‍🍳 ครัว (ออเดอร์)",
     "📱 QR สั่งอาหาร",
 ]
 STAFF_PAGES = [
     "👨‍🍳 ครัว (ออเดอร์)",
-    "🧾 ขายเมนู",
 ]
 
 # ---------------- Sidebar: โลโก้ + ชื่อร้าน + เมนูนำทาง ----------------
@@ -170,26 +164,11 @@ if page == "🏠 หน้าหลัก":
     st.title(f"{LOGO_EMOJI} {RESTAURANT_NAME}")
     st.caption("👋 สวัสดีครับ วันนี้ร้านเรามีอะไรบ้าง")
 
-    _dashboard_df = get_all_transactions()
     _dashboard_inventory = get_all_inventory()
 
-    col_a, col_b, col_c = st.columns(3)
+    col_a, col_b = st.columns(2)
 
     with col_a:
-        if not _dashboard_df.empty:
-            _dashboard_df["date"] = pd.to_datetime(_dashboard_df["date"])
-            _this_month = _dashboard_df[
-                (_dashboard_df["date"].dt.month == date.today().month) &
-                (_dashboard_df["date"].dt.year == date.today().year)
-            ]
-            _income = _this_month[_this_month["type"] == "income"]["amount"].sum()
-            _expense = _this_month[_this_month["type"] == "expense"]["amount"].sum()
-            st.metric("💰 รายรับเดือนนี้", f"{_income:,.0f} บาท")
-            st.caption(f"รายจ่าย {_expense:,.0f} บาท")
-        else:
-            st.metric("💰 รายรับเดือนนี้", "0 บาท")
-
-    with col_b:
         if not _dashboard_inventory.empty:
             _low = _dashboard_inventory[
                 _dashboard_inventory["quantity"] <= _dashboard_inventory["low_stock_threshold"]
@@ -200,103 +179,11 @@ if page == "🏠 หน้าหลัก":
         else:
             st.metric("📦 ของใกล้หมด", "0 รายการ")
 
-    with col_c:
+    with col_b:
         active_orders_count = len(get_active_orders())
         st.metric("🧾 ออเดอร์ที่ยังไม่เสร็จ", f"{active_orders_count} ออเดอร์")
         if active_orders_count > 0:
             st.caption("ไปที่เมนู 👨‍🍳 ครัว (ออเดอร์) เพื่อดูรายละเอียด")
-
-# ================= หน้า: การเงิน =================
-elif page == "📝 การเงิน":
-    st.header("📝 บันทึกรายรับ-รายจ่าย")
-
-    with st.form("transaction_form", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            trans_date = st.date_input("วันที่", value=date.today())
-            trans_type = st.selectbox(
-                "ประเภท", ["income", "expense"],
-                format_func=lambda x: "รายรับ" if x == "income" else "รายจ่าย"
-            )
-        with col2:
-            category = st.text_input("หมวดหมู่ (เช่น ขายอาหาร, ค่าวัตถุดิบ)")
-            amount = st.number_input("จำนวนเงิน (บาท)", min_value=0.0, step=1.0)
-        note = st.text_input("หมายเหตุ (ถ้ามี)")
-
-        submitted = st.form_submit_button("💾 บันทึกรายการ")
-        if submitted:
-            if category:
-                add_transaction(str(datetime.now()), trans_type, category, amount, note)
-                st.success("บันทึกรายการเรียบร้อยแล้ว! ✅")
-                st.rerun()
-            else:
-                st.error("กรุณากรอกหมวดหมู่")
-
-    st.header("📊 สรุปยอดรายรับ-รายจ่าย")
-    df = get_all_transactions()
-
-    if df.empty:
-        st.info("ยังไม่มีรายการบันทึกไว้")
-    else:
-        df["date"] = pd.to_datetime(df["date"])
-
-        period = st.radio(
-            "เลือกช่วงเวลา", ["เดือนนี้", "สัปดาห์นี้", "ทั้งหมด", "กำหนดเอง"], horizontal=True
-        )
-
-        if period == "ทั้งหมด":
-            filtered_df = df
-        elif period == "เดือนนี้":
-            filtered_df = df[
-                (df["date"].dt.month == date.today().month) &
-                (df["date"].dt.year == date.today().year)
-            ]
-        elif period == "สัปดาห์นี้":
-            start_date = date.today() - timedelta(days=7)
-            filtered_df = df[df["date"] >= pd.Timestamp(start_date)]
-        else:  # กำหนดเอง
-            col_start, col_end = st.columns(2)
-            with col_start:
-                start_date = st.date_input("วันที่เริ่มต้น", value=date.today() - timedelta(days=30))
-            with col_end:
-                end_date = st.date_input("วันที่สิ้นสุด", value=date.today())
-            filtered_df = df[
-                (df["date"] >= pd.Timestamp(start_date)) &
-                (df["date"] <= pd.Timestamp(end_date))
-            ]
-
-        total_income = filtered_df[filtered_df["type"] == "income"]["amount"].sum()
-        total_expense = filtered_df[filtered_df["type"] == "expense"]["amount"].sum()
-        net_profit = total_income - total_expense
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("💰 รายรับรวม", f"{total_income:,.2f} บาท")
-        c2.metric("💸 รายจ่ายรวม", f"{total_expense:,.2f} บาท")
-        c3.metric("📈 กำไรสุทธิ", f"{net_profit:,.2f} บาท")
-
-        chart_data = pd.DataFrame(
-            {"ยอดเงิน": [total_income, total_expense]}, index=["รายรับ", "รายจ่าย"]
-        )
-        st.bar_chart(chart_data)
-
-        daily_data = filtered_df.groupby(filtered_df["date"].dt.date)["amount"].sum()
-        st.line_chart(daily_data)
-
-        st.subheader("📋 ประวัติรายการ")
-        st.dataframe(filtered_df, use_container_width=True)
-
-        st.subheader("🗑️ ลบรายการ")
-        df["label"] = (
-            df["id"].astype(str) + " | " + df["date"].astype(str) + " | " +
-            df["type"] + " | " + df["category"] + " | " + df["amount"].astype(str) + " บาท"
-        )
-        selected_label = st.selectbox("เลือกรายการที่ต้องการลบ", df["label"])
-        selected_id = int(selected_label.split(" | ")[0])
-
-        if st.button("🗑️ ลบรายการนี้"):
-            delete_transaction(selected_id)
-            st.success("ลบรายการเรียบร้อยแล้ว! ✅")
-            st.rerun()
 
 # ================= หน้า: สต็อกวัตถุดิบ =================
 elif page == "📦 สต็อกวัตถุดิบ":
@@ -333,14 +220,14 @@ elif page == "📦 สต็อกวัตถุดิบ":
         st.subheader("📋 รายการวัตถุดิบทั้งหมด")
         st.dataframe(inventory_df, use_container_width=True)
 
-# ================= หน้า: สูตรอาหาร =================
-elif page == "🍳 สูตรอาหาร":
-    st.header("🍳 จัดการสูตรอาหาร")
+# ================= หน้า: เมนูอาหาร =================
+elif page == "🍽️ เมนูอาหาร":
+    st.header("🍽️ จัดการเมนูอาหาร")
 
     existing_categories = get_all_categories()
     category_options = existing_categories + ["+ เพิ่มหมวดหมู่ใหม่"] if existing_categories else ["+ เพิ่มหมวดหมู่ใหม่"]
 
-    with st.form("recipe_form", clear_on_submit=True):
+    with st.form("menu_form", clear_on_submit=True):
         menu_name = st.text_input("ชื่อเมนู")
 
         category_choice = st.selectbox("หมวดหมู่เมนู", category_options)
@@ -348,95 +235,33 @@ elif page == "🍳 สูตรอาหาร":
         if category_choice == "+ เพิ่มหมวดหมู่ใหม่":
             new_category_input = st.text_input("พิมพ์ชื่อหมวดหมู่ใหม่ (เช่น อาหารจานหลัก, เครื่องดื่ม, ของหวาน)")
 
-        item_name_recipe = st.text_input("ชื่อวัตถุดิบที่ใช้")
-        qty_used = st.number_input("จำนวนที่ใช้ต่อจาน", min_value=0.0, step=0.1)
-        price = st.number_input("ราคาขายต่อจาน (บาท)", min_value=0.0, step=1.0)
+        price = st.number_input("ราคาขาย (บาท)", min_value=0.0, step=1.0)
 
-        submitted_recipe = st.form_submit_button("➕ เพิ่มวัตถุดิบเข้าสูตรอาหาร")
-        if submitted_recipe:
+        submitted_menu = st.form_submit_button("➕ เพิ่ม/อัปเดตเมนู")
+        if submitted_menu:
             final_category = new_category_input.strip() if category_choice == "+ เพิ่มหมวดหมู่ใหม่" else category_choice
-            if menu_name and item_name_recipe and final_category:
-                add_recipe_item(menu_name, item_name_recipe, qty_used)
+            if menu_name and final_category:
                 set_menu_price(menu_name, price, final_category)
-                st.success(f"เพิ่ม '{item_name_recipe}' เข้าสูตร '{menu_name}' (หมวด {final_category}) เรียบร้อยแล้ว! ✅")
+                st.success(f"บันทึกเมนู '{menu_name}' (หมวด {final_category}) เรียบร้อยแล้ว! ✅")
                 st.rerun()
             else:
-                st.error("กรุณากรอกชื่อเมนู วัตถุดิบ และหมวดหมู่ให้ครบ")
+                st.error("กรุณากรอกชื่อเมนูและหมวดหมู่ให้ครบ")
 
-    recipes_df = get_all_recipes()
-    if recipes_df.empty:
-        st.info("ยังไม่มีสูตรอาหารในระบบ")
+    menu_list_df = get_menu_list()
+    if menu_list_df.empty:
+        st.info("ยังไม่มีเมนูในระบบ")
     else:
-        st.subheader("📋 สูตรอาหารทั้งหมด")
-        st.dataframe(recipes_df, use_container_width=True)
+        st.subheader("📋 เมนูทั้งหมด")
+        st.dataframe(menu_list_df, use_container_width=True)
 
-        st.subheader("🗑️ ลบวัตถุดิบออกจากสูตร")
-        recipes_df["label"] = (
-            recipes_df["id"].astype(str) + " | " + recipes_df["menu_name"] +
-            " ใช้ " + recipes_df["item_name"] + " (" +
-            recipes_df["quantity_used"].astype(str) + ")"
+        st.subheader("🗑️ ลบเมนู")
+        selected_menu_to_delete = st.selectbox(
+            "เลือกเมนูที่จะลบ", menu_list_df["menu_name"].unique(), key="delete_menu_select"
         )
-        selected_recipe_label = st.selectbox(
-            "เลือกรายการที่ต้องการลบ", recipes_df["label"], key="delete_recipe_select"
-        )
-        selected_recipe_id = int(selected_recipe_label.split(" | ")[0])
-
-        if st.button("🗑️ ลบรายการนี้ออกจากสูตร"):
-            delete_recipe_item(selected_recipe_id)
-            st.success("ลบรายการเรียบร้อยแล้ว! ✅")
+        if st.button("🗑️ ลบเมนูนี้"):
+            delete_menu_item(selected_menu_to_delete)
+            st.success(f"ลบเมนู '{selected_menu_to_delete}' เรียบร้อยแล้ว! ✅")
             st.rerun()
-
-        st.subheader("💰 แก้ไขราคาขาย / หมวดหมู่เมนู")
-        menu_list_df = get_menu_list()
-        menu_names_for_price = menu_list_df["menu_name"].unique()
-        selected_menu_for_price = st.selectbox(
-            "เลือกเมนูที่จะแก้ไข", menu_names_for_price, key="edit_price_select"
-        )
-        current_price = get_menu_price(selected_menu_for_price)
-        current_category = menu_list_df[menu_list_df["menu_name"] == selected_menu_for_price]["category"].iloc[0]
-
-        new_price = st.number_input(
-            "ราคาขายใหม่ (บาท)", min_value=0.0, step=1.0,
-            value=float(current_price), key="edit_price_input"
-        )
-        new_category = st.text_input(
-            "หมวดหมู่", value=current_category, key="edit_category_input"
-        )
-        if st.button("💾 อัปเดตข้อมูลเมนู"):
-            set_menu_price(selected_menu_for_price, new_price, new_category.strip() or "อื่นๆ")
-            st.success(f"อัปเดต '{selected_menu_for_price}' เรียบร้อย! ✅")
-            st.rerun()
-
-# ================= หน้า: ขายเมนู =================
-elif page == "🧾 ขายเมนู":
-    st.header("🧾 ขายเมนู")
-    st.caption("ใช้หน้านี้เวลาลูกค้าสั่งที่หน้าร้านโดยตรง (ไม่ผ่าน QR)")
-
-    recipes_df = get_all_recipes()
-    if recipes_df.empty:
-        st.info("ยังไม่มีสูตรอาหารในระบบ กรุณาเพิ่มสูตรก่อน (ไปที่เมนู 🍳 สูตรอาหาร)")
-    else:
-        menu_list = recipes_df["menu_name"].unique()
-
-        with st.form("sell_form", clear_on_submit=True):
-            selected_menu = st.selectbox("เลือกเมนูที่ขาย", menu_list)
-            qty_sold = st.number_input("จำนวนจานที่ขาย", min_value=1, step=1)
-
-            submitted_sell = st.form_submit_button("🧾 บันทึกการขาย")
-            if submitted_sell:
-                sell_menu(selected_menu, qty_sold)
-                price = get_menu_price(selected_menu)
-                total_price = price * qty_sold
-                sale_time = str(datetime.now())
-
-                add_transaction(
-                    sale_time, "income", "ขายอาหาร", total_price,
-                    f"ขาย {selected_menu} {qty_sold} จาน"
-                )
-                add_sale_log(sale_time, selected_menu, qty_sold, total_price)
-
-                st.success(f"ขาย '{selected_menu}' จำนวน {qty_sold} จาน เรียบร้อย! ✅")
-                st.rerun()
 
 # ================= หน้า: รายงานยอดขาย =================
 elif page == "📊 รายงานยอดขาย":
