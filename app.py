@@ -1,6 +1,7 @@
 from datetime import datetime
 import os
 import io
+import base64
 import streamlit as st
 import pandas as pd
 import qrcode
@@ -17,11 +18,106 @@ from database import (
 RESTAURANT_NAME = "YANAGI"
 LOGO_EMOJI = "🍽️"
 LOGO_PATH = "logo.png"  # ถ้ามีไฟล์รูปโลโก้จริง วางไว้โฟลเดอร์เดียวกับ app.py แล้วตั้งชื่อ logo.png
+BACKGROUND_PATH = "background.jpg"  # ถ้ามีรูปพื้นหลัง วางไว้โฟลเดอร์เดียวกับ app.py แล้วตั้งชื่อ background.jpg (หรือ .png ก็ได้ แค่แก้นามสกุลตรงนี้)
 
 # URL จริงของแอปตัวนี้ (ตั้งไว้ล่วงหน้า จะได้ไม่ต้องพิมพ์เองทุกครั้งตอนสร้าง QR)
 APP_BASE_URL = "https://yanagi-restaurant-manager-mkxtzbrcydnej88qoxmufi.streamlit.app"
 
 st.set_page_config(page_title=f"ระบบจัดการร้านอาหาร - {RESTAURANT_NAME}", page_icon=LOGO_EMOJI, layout="wide")
+
+
+# ---------------- ธีมสี + ฟอนต์ + รูปพื้นหลัง (แดง-ทอง ตามโลโก้ YANAGI) ----------------
+def _file_to_base64(path):
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
+
+_background_css = ""
+if os.path.exists(BACKGROUND_PATH):
+    _bg_ext = BACKGROUND_PATH.split(".")[-1]
+    _bg_b64 = _file_to_base64(BACKGROUND_PATH)
+    _background_css = f"""
+        .stApp {{
+            background-image: linear-gradient(rgba(20, 15, 12, 0.90), rgba(20, 15, 12, 0.90)), url("data:image/{_bg_ext};base64,{_bg_b64}");
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed;
+        }}
+    """
+
+st.markdown(f"""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+Thai:wght@500;600;700&family=Noto+Sans+Thai:wght@400;500;600&display=swap');
+
+html, body, [class*="css"], .stMarkdown, .stTextInput, .stNumberInput, .stSelectbox {{
+    font-family: 'Noto Sans Thai', sans-serif !important;
+}}
+
+h1, h2, h3, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {{
+    font-family: 'Noto Serif Thai', serif !important;
+    color: #F2E9DC !important;
+    letter-spacing: 0.3px;
+}}
+
+.stApp {{
+    background-color: #1B1512;
+}}
+{_background_css}
+
+[data-testid="stSidebar"] {{
+    background-color: #221A15;
+    border-right: 1px solid #3A2C22;
+}}
+
+[data-testid="stSidebar"] h3 {{
+    color: #C8A24D !important;
+}}
+
+.stButton>button {{
+    background-color: #9E2B25;
+    color: #F2E9DC;
+    border: 1px solid #C8A24D;
+    border-radius: 6px;
+    font-family: 'Noto Sans Thai', sans-serif;
+    transition: all 0.15s ease;
+}}
+.stButton>button:hover {{
+    background-color: #C8A24D;
+    color: #1B1512;
+    border-color: #C8A24D;
+}}
+
+[data-testid="stMetricValue"] {{
+    color: #C8A24D !important;
+}}
+
+[data-testid="stMetricLabel"] {{
+    color: #D8C9B8 !important;
+}}
+
+div[data-testid="stExpander"] {{
+    background-color: #241D18;
+    border: 1px solid #3A2C22;
+    border-radius: 8px;
+}}
+
+div[data-testid="stVerticalBlockBorderWrapper"] {{
+    border-color: #3A2C22 !important;
+    border-radius: 10px !important;
+}}
+
+.stDataFrame {{
+    border: 1px solid #3A2C22;
+    border-radius: 8px;
+}}
+
+hr {{
+    border-color: #3A2C22 !important;
+}}
+</style>
+""", unsafe_allow_html=True)
+
+
 
 @st.cache_resource
 def _init_db_once():
