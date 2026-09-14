@@ -333,7 +333,7 @@ with st.sidebar:
         st.markdown(f"<div style='font-size:60px; text-align:center'>{LOGO_EMOJI}</div>", unsafe_allow_html=True)
 
     st.markdown(f"<h3 style='text-align:center'>{RESTAURANT_NAME}</h3>", unsafe_allow_html=True)
-    role_label = {"owner": "เจ้าของร้าน", "cashier": "แคชเชียร์", "staff": "พนักงานครัว"}.get(USER_ROLE, "พนักงาน")
+    role_label = {"owner": "Manager", "cashier": "แคชเชียร์", "staff": "พนักงานครัว"}.get(USER_ROLE, "พนักงาน")
     st.caption(f"👤 เข้าสู่ระบบในบทบาท: {role_label}")
     st.divider()
 
@@ -432,7 +432,9 @@ elif page == "🍽️ เมนูอาหาร":
     st.header("🍽️ จัดการเมนูอาหาร")
 
     existing_categories = get_all_categories()
-    category_options = existing_categories + ["+ เพิ่มหมวดหมู่ใหม่"] if existing_categories else ["+ เพิ่มหมวดหมู่ใหม่"]
+    default_categories = ["บุฟเฟ่", "อาลาคาร์ท", "ราเมง", "น้ำ", "เหล้า", "เบียร์", "บุฟเฟ่เบียร์", "ไวน์", "สปาร์กลิ้ง"]
+    combined_categories = existing_categories + [c for c in default_categories if c not in existing_categories]
+    category_options = combined_categories + ["+ เพิ่มหมวดหมู่ใหม่"]
 
     with st.form("menu_form", clear_on_submit=True):
         menu_name = st.text_input("ชื่อเมนู")
@@ -471,9 +473,9 @@ elif page == "🍽️ เมนูอาหาร":
         st.markdown("**ขั้นตอนที่ 1: นำเข้าชื่อเมนู + หมวดหมู่ + ราคา จากไฟล์ Excel/CSV**")
 
         template_df = pd.DataFrame({
-            "ชื่อเมนู": ["ผัดกะเพราหมู", "ต้มยำกุ้ง"],
-            "หมวดหมู่": ["อาหารจานหลัก", "อาหารจานหลัก"],
-            "ราคา": [60, 120],
+            "ชื่อเมนู": ["ราเมงหมูชาชู", "ไวน์แดงแก้ว"],
+            "หมวดหมู่": ["ราเมง", "ไวน์"],
+            "ราคา": [180, 150],
         })
         template_buf = io.BytesIO()
         template_df.to_csv(template_buf, index=False, encoding="utf-8-sig")
