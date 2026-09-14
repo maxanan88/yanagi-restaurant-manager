@@ -38,7 +38,7 @@ if os.path.exists(BACKGROUND_PATH):
     _bg_b64 = _file_to_base64(BACKGROUND_PATH)
     _background_css = f"""
         .stApp {{
-            background-image: linear-gradient(rgba(20, 15, 12, 0.90), rgba(20, 15, 12, 0.90)), url("data:image/{_bg_ext};base64,{_bg_b64}");
+            background-image: linear-gradient(rgba(250, 248, 245, 0.90), rgba(250, 248, 245, 0.90)), url("data:image/{_bg_ext};base64,{_bg_b64}");
             background-size: cover;
             background-position: center;
             background-attachment: fixed;
@@ -55,64 +55,73 @@ html, body, [class*="css"], .stMarkdown, .stTextInput, .stNumberInput, .stSelect
 
 h1, h2, h3, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {{
     font-family: 'Noto Serif Thai', serif !important;
-    color: #F2E9DC !important;
+    color: #241F1D !important;
     letter-spacing: 0.3px;
 }}
 
 .stApp {{
-    background-color: #1B1512;
+    background-color: #FAF8F5;
 }}
 {_background_css}
 
 [data-testid="stSidebar"] {{
-    background-color: #221A15;
-    border-right: 1px solid #3A2C22;
+    background-color: #F5EDE8;
+    border-right: 1px solid #E3D5CB;
 }}
 
 [data-testid="stSidebar"] h3 {{
-    color: #C8A24D !important;
+    color: #A6192E !important;
+}}
+
+[data-testid="stSidebar"] p, [data-testid="stSidebar"] label, [data-testid="stSidebar"] span {{
+    color: #4A3F38 !important;
 }}
 
 .stButton>button {{
-    background-color: #9E2B25;
-    color: #F2E9DC;
-    border: 1px solid #C8A24D;
+    background-color: #A6192E;
+    color: #FAF8F5;
+    border: 1px solid #A6192E;
     border-radius: 6px;
     font-family: 'Noto Sans Thai', sans-serif;
     transition: all 0.15s ease;
 }}
 .stButton>button:hover {{
-    background-color: #C8A24D;
-    color: #1B1512;
-    border-color: #C8A24D;
+    background-color: #FAF8F5;
+    color: #A6192E;
+    border-color: #A6192E;
 }}
 
 [data-testid="stMetricValue"] {{
-    color: #C8A24D !important;
+    color: #A6192E !important;
 }}
 
 [data-testid="stMetricLabel"] {{
-    color: #D8C9B8 !important;
+    color: #6B5F58 !important;
 }}
 
 div[data-testid="stExpander"] {{
-    background-color: #241D18;
-    border: 1px solid #3A2C22;
+    background-color: #FFFFFF;
+    border: 1px solid #E3D5CB;
     border-radius: 8px;
 }}
 
 div[data-testid="stVerticalBlockBorderWrapper"] {{
-    border-color: #3A2C22 !important;
+    border-color: #E3D5CB !important;
     border-radius: 10px !important;
+    background-color: #FFFFFF;
 }}
 
 .stDataFrame {{
-    border: 1px solid #3A2C22;
+    border: 1px solid #E3D5CB;
     border-radius: 8px;
 }}
 
 hr {{
-    border-color: #3A2C22 !important;
+    border-color: #E3D5CB !important;
+}}
+
+p, span, label, .stMarkdown, .stCaption {{
+    color: #4A3F38;
 }}
 </style>
 """, unsafe_allow_html=True)
