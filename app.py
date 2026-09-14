@@ -32,7 +32,16 @@ def _file_to_base64(path):
         return base64.b64encode(f.read()).decode()
 
 
-_background_css = ""
+_background_css = f"""
+    .stApp {{
+        background-color: #FAF8F5;
+        background-image:
+            radial-gradient(circle at 0 100%, transparent 24px, rgba(166,25,46,0.07) 25px, rgba(166,25,46,0.07) 27px, transparent 28px),
+            radial-gradient(circle at 50% 100%, transparent 24px, rgba(166,25,46,0.07) 25px, rgba(166,25,46,0.07) 27px, transparent 28px),
+            radial-gradient(circle at 100% 100%, transparent 24px, rgba(166,25,46,0.07) 25px, rgba(166,25,46,0.07) 27px, transparent 28px);
+        background-size: 60px 30px;
+    }}
+"""
 if os.path.exists(BACKGROUND_PATH):
     _bg_ext = BACKGROUND_PATH.split(".")[-1]
     _bg_b64 = _file_to_base64(BACKGROUND_PATH)
