@@ -133,6 +133,20 @@ def delete_transaction(transaction_id):
     conn.close()
 
 
+def get_monthly_expense_by_category():
+    """สรุปรายจ่ายรวมรายเดือน แยกตามหมวดหมู่ค่าใช้จ่าย (เอาไว้เทียบเดือนต่อเดือน เช่น ค่าวัตถุดิบขึ้นไหม)"""
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT strftime('%Y-%m', date) AS month, category, SUM(amount) AS total
+        FROM transactions
+        WHERE type = 'รายจ่าย'
+        GROUP BY month, category
+        ORDER BY month
+    """).fetchall()
+    conn.close()
+    return pd.DataFrame(rows, columns=["month", "category", "total"])
+
+
 # ---------------- Inventory (วัตถุดิบคงคลัง) ----------------
 
 def add_or_update_item(item_name, quantity, unit, low_stock_threshold, mode="add"):
@@ -259,6 +273,21 @@ def get_all_sales():
     ).fetchall()
     conn.close()
     return pd.DataFrame(rows, columns=["id", "date", "menu_name", "qty_sold", "total_price"])
+
+
+def get_sales_by_category():
+    """สรุปยอดขายแยกตามหมวดหมู่เมนู รายเดือน (เอาไว้ดูว่าราเมง/บุฟเฟ่/อาลาคาร์ท ฯลฯ ขายได้เท่าไหร่ เทียบเป็น % ได้)"""
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT strftime('%Y-%m', sl.date) AS month, mp.category AS category,
+               SUM(sl.qty_sold) AS qty, SUM(sl.total_price) AS revenue
+        FROM sales_log sl
+        LEFT JOIN menu_prices mp ON sl.menu_name = mp.menu_name
+        GROUP BY month, category
+        ORDER BY month
+    """).fetchall()
+    conn.close()
+    return pd.DataFrame(rows, columns=["month", "category", "qty", "revenue"])
 
 
 def get_menu_price(menu_name):
