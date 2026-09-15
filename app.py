@@ -254,8 +254,8 @@ if query_params.get("page") == "order":
 #            บน Streamlit Cloud ตั้งค่าใน Settings > Secrets ของแอป
 # รูปแบบใน secrets.toml:
 #   [[users]]
-#   username = "ittipon"
-#   password = "8899m"
+#   username = "MSAN"
+#   password = "8899M"
 #   role = "owner"       # เห็นทุกเมนู
 #
 #   [[users]]
