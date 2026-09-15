@@ -2,6 +2,7 @@ from datetime import datetime
 import os
 import io
 import base64
+import urllib.parse
 import streamlit as st
 import pandas as pd
 import qrcode
@@ -201,18 +202,33 @@ if query_params.get("page") == "order":
     st.title(f"{LOGO_EMOJI} สั่งอาหาร - {RESTAURANT_NAME}")
 
     prefill_table = query_params.get("table", "")
+    zone_filter = query_params.get("zone", "").strip()
+    # หมวดเครื่องดื่มทั่วไป ให้เห็นได้ทุกโซนเสมอ (ไม่ผูกกับโซนไหนโซนหนึ่ง)
+    # ยกเว้น "บุฟเฟ่เบียร์" ซึ่งขึ้นต้นด้วยคำว่า "บุฟเฟ่" อยู่แล้ว เลยกรองเข้าโซนบุฟเฟ่ให้เองโดยอัตโนมัติ
+    UNIVERSAL_CATEGORIES = ["น้ำ", "เหล้า", "เบียร์", "ไวน์", "สปาร์กลิ้ง"]
     menu_df = get_menu_list()
 
     if menu_df.empty:
         st.info("ร้านยังไม่ได้เปิดรับออเดอร์ในขณะนี้ครับ")
     else:
+        display_menu_df = menu_df
+        if zone_filter:
+            zoned_df = menu_df[
+                menu_df["category"].fillna("").str.startswith(zone_filter)
+                | menu_df["category"].fillna("").isin(UNIVERSAL_CATEGORIES)
+            ]
+            if not zoned_df.empty:
+                display_menu_df = zoned_df
+            else:
+                st.info(f"ยังไม่พบเมนูในโซน '{zone_filter}' — แสดงเมนูทั้งหมดแทนครับ")
+
         with st.form("customer_order_form"):
             table_no = st.text_input("หมายเลขโต๊ะ", value=prefill_table)
             st.write("เลือกเมนูที่ต้องการสั่ง:")
 
             qty_inputs = {}
             # แบ่งเมนูเป็นหมวดหมู่ ให้ลูกค้าหาง่ายขึ้น
-            for category_name, group_df in menu_df.groupby("category"):
+            for category_name, group_df in display_menu_df.groupby("category"):
                 st.markdown(f"**🍽️ {category_name}**")
                 for _, row in group_df.iterrows():
                     col_img, col_info = st.columns([1, 3])
@@ -506,6 +522,14 @@ elif page == "🍽️ เมนูอาหาร":
                     st.error(f"ไฟล์ต้องมีคอลัมน์: {', '.join(required_cols)}")
                 else:
                     st.dataframe(bulk_df, use_container_width=True)
+
+                    dup_names = bulk_df["ชื่อเมนู"][bulk_df["ชื่อเมนู"].duplicated(keep=False)].unique()
+                    if len(dup_names) > 0:
+                        st.warning(
+                            "⚠️ พบชื่อเมนูซ้ำกันในไฟล์นี้! เมนูที่ชื่อซ้ำกันจะถูกบันทึกทับกันเอง เหลือแค่ราคาล่าสุด "
+                            "แนะนำให้แก้ชื่อให้ไม่ซ้ำก่อนนำเข้า (เช่น เติม (ซูชิ)/(ซาชิมิ) ต่อท้ายชื่อ):\n\n"
+                            + "\n".join(f"- {name}" for name in dup_names)
+                        )
                     if st.button("📥 นำเข้าเมนูทั้งหมดนี้"):
                         imported_count = 0
                         for _, bulk_row in bulk_df.iterrows():
@@ -819,12 +843,19 @@ elif page == "📱 QR สั่งอาหาร":
     st.divider()
     st.subheader("🔲 สร้าง QR ทีละโต๊ะ")
     table_number = st.text_input("หมายเลขโต๊ะ", value="1")
+    zone_input = st.text_input(
+        "โซน (ไม่บังคับ — ใส่ไว้ให้ QR โต๊ะนี้เปิดมาเจอเฉพาะเมนูของโซนนั้นเลย)",
+        placeholder="เช่น บุฟเฟ่ / อาลาคาร์ท / VIP",
+        help="พิมพ์ให้ตรงกับตัวอักษรตอนต้นของ 'หมวดหมู่' ที่ตั้งไว้ตอนเพิ่มเมนู เช่น ถ้าหมวดหมู่คือ 'บุฟเฟ่ - ของทอด' ให้พิมพ์แค่ 'บุฟเฟ่' ตรงนี้ ปล่อยว่างไว้ถ้าอยากให้เห็นเมนูทั้งหมด",
+    )
 
     if st.button("🔲 สร้าง QR โค้ด"):
         if not base_url:
             st.error("กรุณากรอกที่อยู่เว็บก่อน")
         else:
             order_url = f"{base_url.rstrip('/')}/?page=order&table={table_number}"
+            if zone_input.strip():
+                order_url += f"&zone={urllib.parse.quote(zone_input.strip())}"
             qr_img = qrcode.make(order_url)
             buf = io.BytesIO()
             qr_img.save(buf, format="PNG")
@@ -846,6 +877,12 @@ elif page == "📱 QR สั่งอาหาร":
         start_table = st.number_input("โต๊ะเริ่มต้น", min_value=1, step=1, value=1)
     with col_b:
         end_table = st.number_input("โต๊ะสุดท้าย", min_value=1, step=1, value=10)
+    batch_zone_input = st.text_input(
+        "โซนของโต๊ะช่วงนี้ (ไม่บังคับ)",
+        placeholder="เช่น บุฟเฟ่ / อาลาคาร์ท / VIP",
+        key="batch_zone",
+        help="ใช้ตอนโต๊ะช่วงนี้ทั้งหมดอยู่โซนเดียวกัน เช่น โต๊ะ 1-10 เป็นโซนบุฟเฟ่ทั้งหมด",
+    )
 
     if st.button("🔲 สร้าง QR ทุกโต๊ะ"):
         if not base_url:
@@ -857,6 +894,8 @@ elif page == "📱 QR สั่งอาหาร":
             cols = st.columns(4)
             for i, t_no in enumerate(table_numbers):
                 order_url = f"{base_url.rstrip('/')}/?page=order&table={t_no}"
+                if batch_zone_input.strip():
+                    order_url += f"&zone={urllib.parse.quote(batch_zone_input.strip())}"
                 qr_img = qrcode.make(order_url)
                 buf = io.BytesIO()
                 qr_img.save(buf, format="PNG")
