@@ -213,9 +213,12 @@ if query_params.get("page") == "order":
     else:
         display_menu_df = menu_df
         if zone_filter:
+            is_universal_drink = menu_df["category"].fillna("").apply(
+                lambda c: any(c.startswith(u) for u in UNIVERSAL_CATEGORIES)
+            )
             zoned_df = menu_df[
                 menu_df["category"].fillna("").str.startswith(zone_filter)
-                | menu_df["category"].fillna("").isin(UNIVERSAL_CATEGORIES)
+                | is_universal_drink
             ]
             if not zoned_df.empty:
                 display_menu_df = zoned_df
