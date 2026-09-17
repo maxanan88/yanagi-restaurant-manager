@@ -25,6 +25,23 @@ BACKGROUND_PATH = "background.jpg"  # ถ้ามีรูปพื้นหล
 # URL จริงของแอปตัวนี้ (ตั้งไว้ล่วงหน้า จะได้ไม่ต้องพิมพ์เองทุกครั้งตอนสร้าง QR)
 APP_BASE_URL = "https://yanagi-restaurant-manager-mkxtzbrcydnej88qoxmufi.streamlit.app"
 
+# ข้อมูลติดต่อร้าน แสดงที่หน้าสั่งอาหารลูกค้า เลือกได้ตาม QR (พารามิเตอร์ brand)
+# ใช้กับกรณีมีร้านย่อยในเครือ เช่น QR โต๊ะราเมงโชว์คอนแทคของ Tonchinkan Ramen แทน Yanagi หลัก
+CONTACT_INFO = {
+    "default": {
+        "name": "Sushi Yanagi",
+        "line": "yanagi",
+        "fb_url": "https://web.facebook.com/Sushiyanagith",
+        "tel": "061 331 6464",
+    },
+    "tonchinkan": {
+        "name": "Tonchinkan Ramen",
+        "line": None,
+        "fb_url": "https://web.facebook.com/tonchinkancri",
+        "tel": "061 331 6464",
+    },
+}
+
 st.set_page_config(page_title=f"ระบบจัดการร้านอาหาร - {RESTAURANT_NAME}", page_icon=LOGO_EMOJI, layout="wide")
 
 
@@ -199,13 +216,27 @@ def print_kitchen_ticket(order_row, items_df):
 # ================= หน้าสั่งอาหารสำหรับลูกค้า (ไม่ต้อง login) =================
 query_params = st.query_params
 if query_params.get("page") == "order":
-    st.title(f"{LOGO_EMOJI} สั่งอาหาร - {RESTAURANT_NAME}")
+    brand_key = query_params.get("brand", "default")
+    contact = CONTACT_INFO.get(brand_key, CONTACT_INFO["default"])
+
+    col_title, col_contact = st.columns([3, 1])
+    with col_title:
+        st.title(f"{LOGO_EMOJI} สั่งอาหาร - {RESTAURANT_NAME}")
+    with col_contact:
+        contact_lines = [f"**📘 [{contact['name']}]({contact['fb_url']})**"]
+        if contact.get("line"):
+            contact_lines.append(f"💬 Line: @{contact['line']}")
+        if contact.get("tel"):
+            contact_lines.append(f"☎️ {contact['tel']}")
+        st.markdown("<br>".join(contact_lines), unsafe_allow_html=True)
+
+    st.caption("ราคาทั้งหมดยังไม่รวม Service Charge 10% และ VAT 7% (All prices are subject to 10% service charge and 7% VAT)")
 
     prefill_table = query_params.get("table", "")
     zone_filter = query_params.get("zone", "").strip()
     # หมวดเครื่องดื่มทั่วไป ให้เห็นได้ทุกโซนเสมอ (ไม่ผูกกับโซนไหนโซนหนึ่ง)
-    # ยกเว้น "บุฟเฟ่เบียร์" ซึ่งขึ้นต้นด้วยคำว่า "บุฟเฟ่" อยู่แล้ว เลยกรองเข้าโซนบุฟเฟ่ให้เองโดยอัตโนมัติ
-    UNIVERSAL_CATEGORIES = ["น้ำ", "เหล้า", "เบียร์", "ไวน์", "สปาร์กลิ้ง"]
+    # ยกเว้น "บุฟเฟ่เบียร์"/"บุฟเฟ่ไวน์" ซึ่งขึ้นต้นด้วยคำว่า "บุฟเฟ่" อยู่แล้ว เลยกรองเข้าโซนบุฟเฟ่ให้เองโดยอัตโนมัติ
+    UNIVERSAL_CATEGORIES = ["เครื่องดื่ม", "น้ำ", "เหล้า", "เบียร์", "ไวน์", "สปาร์กลิ้ง"]
     menu_df = get_menu_list()
 
     if menu_df.empty:
@@ -244,10 +275,15 @@ if query_params.get("page") == "order":
                                 unsafe_allow_html=True,
                             )
                     with col_info:
+                        item_label = row["menu_name"]
+                        if row.get("is_recommended"):
+                            item_label = f"⭐ แนะนำ | {item_label}"
                         qty_inputs[row["menu_name"]] = st.number_input(
-                            f"{row['menu_name']} ({row['price']:,.0f} บาท)",
+                            f"{item_label} ({row['price']:,.0f} บาท)",
                             min_value=0, step=1, key=f"cust_qty_{row['menu_name']}"
                         )
+                        if row.get("description"):
+                            st.caption(row["description"])
 
             submitted_order = st.form_submit_button("🛒 สั่งอาหาร")
 
@@ -453,7 +489,12 @@ elif page == "🍽️ เมนูอาหาร":
     st.header("🍽️ จัดการเมนูอาหาร")
 
     existing_categories = get_all_categories()
-    default_categories = ["บุฟเฟ่", "อาลาคาร์ท", "ราเมง", "น้ำ", "เหล้า", "เบียร์", "บุฟเฟ่เบียร์", "ไวน์", "สปาร์กลิ้ง"]
+    default_categories = [
+        "บุฟเฟ่", "อาลาคาร์ท", "ราเมง",
+        "เครื่องดื่ม - น้ำ", "เครื่องดื่ม - เหล้า", "เครื่องดื่ม - เบียร์", "เครื่องดื่ม - ไวน์", "เครื่องดื่ม - สปาร์กลิ้ง",
+        "เครื่องดื่ม - Sake", "เครื่องดื่ม - Soju", "เครื่องดื่ม - Cocktail", "เครื่องดื่ม - Mixer",
+        "บุฟเฟ่เบียร์", "บุฟเฟ่ไวน์",
+    ]
     combined_categories = existing_categories + [c for c in default_categories if c not in existing_categories]
     category_options = combined_categories + ["+ เพิ่มหมวดหมู่ใหม่"]
 
@@ -466,6 +507,13 @@ elif page == "🍽️ เมนูอาหาร":
             new_category_input = st.text_input("พิมพ์ชื่อหมวดหมู่ใหม่ (เช่น อาหารจานหลัก, เครื่องดื่ม, ของหวาน)")
 
         price = st.number_input("ราคาขาย (บาท)", min_value=0.0, step=1.0)
+
+        description = st.text_area(
+            "คำอธิบายเพิ่มเติม (ไม่บังคับ)",
+            placeholder="เช่น ส่วนประกอบในเซต: ฮามาจิ / แซลมอน / กุ้งอากะ / โฮทาเตะ / อุนางิ",
+            height=70,
+        )
+        is_recommended = st.checkbox("⭐ ติดป้ายแนะนำเมนูนี้ (Recommended)")
 
         uploaded_image = st.file_uploader(
             "รูปเมนู (ไม่บังคับ — ถ้าไม่อัปโหลดใหม่ จะใช้รูปเดิมที่เคยอัปโหลดไว้)",
@@ -483,7 +531,7 @@ elif page == "🍽️ เมนูอาหาร":
                     img_buf = io.BytesIO()
                     img.convert("RGB").save(img_buf, format="JPEG", quality=85)
                     image_bytes = img_buf.getvalue()
-                set_menu_price(menu_name, price, final_category, image_bytes)
+                set_menu_price(menu_name, price, final_category, image_bytes, description.strip() or None, is_recommended)
                 st.success(f"บันทึกเมนู '{menu_name}' (หมวด {final_category}) เรียบร้อยแล้ว! ✅")
                 st.rerun()
             else:
@@ -494,9 +542,11 @@ elif page == "🍽️ เมนูอาหาร":
         st.markdown("**ขั้นตอนที่ 1: นำเข้าชื่อเมนู + หมวดหมู่ + ราคา จากไฟล์ Excel/CSV**")
 
         template_df = pd.DataFrame({
-            "ชื่อเมนู": ["ราเมงหมูชาชู", "ไวน์แดงแก้ว"],
-            "หมวดหมู่": ["ราเมง", "ไวน์"],
-            "ราคา": [180, 150],
+            "ชื่อเมนู": ["ราเมงหมูชาชู", "เซตอูเมะ / Sushi Set Ume"],
+            "หมวดหมู่": ["ราเมง", "อาลาคาร์ท - เซตซูชิ"],
+            "ราคา": [180, 420],
+            "คำอธิบาย": ["", "ฮามาจิ / แซลมอน / กุ้งอากะ / โฮทาเตะ / อุนางิ"],
+            "แนะนำ": ["", "แนะนำ"],
         })
         template_buf = io.BytesIO()
         template_df.to_csv(template_buf, index=False, encoding="utf-8-sig")
@@ -506,7 +556,11 @@ elif page == "🍽️ เมนูอาหาร":
             file_name="ตัวอย่างเมนู.csv",
             mime="text/csv",
         )
-        st.caption("เปิดไฟล์นี้ด้วย Excel แล้วพิมพ์รายการเมนูทั้งหมดต่อจากตัวอย่างได้เลย (คอลัมน์ต้องชื่อ ชื่อเมนู, หมวดหมู่, ราคา เป๊ะๆ) แล้วค่อยอัปโหลดกลับเข้ามา จะเซฟเป็น .csv หรือ .xlsx ก็ได้")
+        st.caption(
+            "เปิดไฟล์นี้ด้วย Excel แล้วพิมพ์รายการเมนูทั้งหมดต่อจากตัวอย่างได้เลย คอลัมน์ 'ชื่อเมนู', 'หมวดหมู่', 'ราคา' ต้องมีเป๊ะๆ "
+            "ส่วน 'คำอธิบาย' กับ 'แนะนำ' ใส่หรือไม่ใส่ก็ได้ (ถ้าใส่ 'แนะนำ' ในช่อง แนะนำ จะติดป้ายเมนูนั้นให้ ถ้าปล่อยว่างจะไม่ติดป้าย) "
+            "แล้วค่อยอัปโหลดกลับเข้ามา จะเซฟเป็น .csv หรือ .xlsx ก็ได้"
+        )
 
         bulk_menu_file = st.file_uploader(
             "อัปโหลดไฟล์เมนู (.csv หรือ .xlsx)",
@@ -535,6 +589,8 @@ elif page == "🍽️ เมนูอาหาร":
                         )
                     if st.button("📥 นำเข้าเมนูทั้งหมดนี้"):
                         imported_count = 0
+                        has_desc_col = "คำอธิบาย" in bulk_df.columns
+                        has_rec_col = "แนะนำ" in bulk_df.columns
                         for _, bulk_row in bulk_df.iterrows():
                             row_name = str(bulk_row["ชื่อเมนู"]).strip()
                             row_category = str(bulk_row["หมวดหมู่"]).strip()
@@ -542,8 +598,14 @@ elif page == "🍽️ เมนูอาหาร":
                                 row_price = float(bulk_row["ราคา"])
                             except (ValueError, TypeError):
                                 continue
+                            row_desc = None
+                            if has_desc_col and pd.notna(bulk_row["คำอธิบาย"]):
+                                row_desc = str(bulk_row["คำอธิบาย"]).strip() or None
+                            row_rec = False
+                            if has_rec_col and pd.notna(bulk_row["แนะนำ"]):
+                                row_rec = str(bulk_row["แนะนำ"]).strip() != ""
                             if row_name and row_category:
-                                set_menu_price(row_name, row_price, row_category)
+                                set_menu_price(row_name, row_price, row_category, description=row_desc, is_recommended=row_rec)
                                 imported_count += 1
                         st.success(f"นำเข้าเมนูสำเร็จ {imported_count} รายการ ✅")
                         st.rerun()
@@ -851,6 +913,12 @@ elif page == "📱 QR สั่งอาหาร":
         placeholder="เช่น บุฟเฟ่ / อาลาคาร์ท / VIP",
         help="พิมพ์ให้ตรงกับตัวอักษรตอนต้นของ 'หมวดหมู่' ที่ตั้งไว้ตอนเพิ่มเมนู เช่น ถ้าหมวดหมู่คือ 'บุฟเฟ่ - ของทอด' ให้พิมพ์แค่ 'บุฟเฟ่' ตรงนี้ ปล่อยว่างไว้ถ้าอยากให้เห็นเมนูทั้งหมด",
     )
+    brand_choice = st.selectbox(
+        "ป้ายติดต่อร้านที่จะโชว์บนหน้าสั่งอาหาร",
+        list(CONTACT_INFO.keys()),
+        format_func=lambda k: CONTACT_INFO[k]["name"],
+        help="เลือก 'tonchinkan' สำหรับโต๊ะโซนราเมง ให้ลูกค้าเห็นคอนแทค Tonchinkan Ramen แทน Yanagi หลัก",
+    )
 
     if st.button("🔲 สร้าง QR โค้ด"):
         if not base_url:
@@ -859,6 +927,8 @@ elif page == "📱 QR สั่งอาหาร":
             order_url = f"{base_url.rstrip('/')}/?page=order&table={table_number}"
             if zone_input.strip():
                 order_url += f"&zone={urllib.parse.quote(zone_input.strip())}"
+            if brand_choice != "default":
+                order_url += f"&brand={brand_choice}"
             qr_img = qrcode.make(order_url)
             buf = io.BytesIO()
             qr_img.save(buf, format="PNG")
@@ -886,6 +956,12 @@ elif page == "📱 QR สั่งอาหาร":
         key="batch_zone",
         help="ใช้ตอนโต๊ะช่วงนี้ทั้งหมดอยู่โซนเดียวกัน เช่น โต๊ะ 1-10 เป็นโซนบุฟเฟ่ทั้งหมด",
     )
+    batch_brand_choice = st.selectbox(
+        "ป้ายติดต่อร้านสำหรับโต๊ะช่วงนี้",
+        list(CONTACT_INFO.keys()),
+        format_func=lambda k: CONTACT_INFO[k]["name"],
+        key="batch_brand",
+    )
 
     if st.button("🔲 สร้าง QR ทุกโต๊ะ"):
         if not base_url:
@@ -899,6 +975,8 @@ elif page == "📱 QR สั่งอาหาร":
                 order_url = f"{base_url.rstrip('/')}/?page=order&table={t_no}"
                 if batch_zone_input.strip():
                     order_url += f"&zone={urllib.parse.quote(batch_zone_input.strip())}"
+                if batch_brand_choice != "default":
+                    order_url += f"&brand={batch_brand_choice}"
                 qr_img = qrcode.make(order_url)
                 buf = io.BytesIO()
                 qr_img.save(buf, format="PNG")
