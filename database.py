@@ -54,22 +54,28 @@ def init_db():
         )
     """)
 
-    # ตารางราคาขายต่อเมนู (มีหมวดหมู่ + รูปภาพ)
+    # ตารางราคาขายต่อเมนู (มีหมวดหมู่ + รูปภาพ + คำอธิบาย + แนะนำ)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS menu_prices (
             menu_name TEXT PRIMARY KEY,
             price REAL NOT NULL,
             category TEXT NOT NULL DEFAULT 'อื่นๆ',
-            image BLOB
+            image BLOB,
+            description TEXT,
+            is_recommended INTEGER NOT NULL DEFAULT 0
         )
     """)
 
-    # เผื่อฐานข้อมูลเก่าที่สร้างไว้ก่อนมีคอลัมน์ category/image ให้เติมให้อัตโนมัติ
+    # เผื่อฐานข้อมูลเก่าที่สร้างไว้ก่อนมีคอลัมน์เหล่านี้ ให้เติมให้อัตโนมัติ
     existing_columns = [row[1] for row in conn.execute("PRAGMA table_info(menu_prices)").fetchall()]
     if "category" not in existing_columns:
         conn.execute("ALTER TABLE menu_prices ADD COLUMN category TEXT NOT NULL DEFAULT 'อื่นๆ'")
     if "image" not in existing_columns:
         conn.execute("ALTER TABLE menu_prices ADD COLUMN image BLOB")
+    if "description" not in existing_columns:
+        conn.execute("ALTER TABLE menu_prices ADD COLUMN description TEXT")
+    if "is_recommended" not in existing_columns:
+        conn.execute("ALTER TABLE menu_prices ADD COLUMN is_recommended INTEGER NOT NULL DEFAULT 0")
 
     # ตารางบันทึกการขายแยกรายเมนู
     conn.execute("""
@@ -223,19 +229,23 @@ def delete_recipe_item(recipe_id):
 
 # ---------------- Menu price + selling ----------------
 
-def set_menu_price(menu_name, price, category="อื่นๆ", image_bytes=None):
+def set_menu_price(menu_name, price, category="อื่นๆ", image_bytes=None, description=None, is_recommended=False):
     """
     image_bytes: ถ้าไม่ส่งมา (None) จะไม่ไปทับรูปเดิมที่เคยอัปโหลดไว้
+    description: คำอธิบายเพิ่มเติม เช่น รายละเอียดส่วนประกอบในเซต (ไม่บังคับ)
+    is_recommended: True ถ้าอยากติดป้ายแนะนำเมนูนี้ให้ลูกค้าเห็น
     """
     conn = get_connection()
     conn.execute("""
-        INSERT INTO menu_prices (menu_name, price, category, image)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO menu_prices (menu_name, price, category, image, description, is_recommended)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(menu_name) DO UPDATE SET
             price = excluded.price,
             category = excluded.category,
-            image = COALESCE(excluded.image, menu_prices.image)
-    """, (menu_name, price, category, image_bytes))
+            image = COALESCE(excluded.image, menu_prices.image),
+            description = excluded.description,
+            is_recommended = excluded.is_recommended
+    """, (menu_name, price, category, image_bytes, description, 1 if is_recommended else 0))
     conn.commit()
     conn.close()
 
@@ -316,13 +326,13 @@ def sell_menu(menu_name, qty_sold):
 
 
 def get_menu_list():
-    """เอาไว้แสดงเมนู+ราคา+รูปให้ลูกค้าดูตอนสั่งอาหารผ่าน QR"""
+    """เอาไว้แสดงเมนู+ราคา+รูป+คำอธิบาย+แนะนำ ให้ลูกค้าดูตอนสั่งอาหารผ่าน QR"""
     conn = get_connection()
     rows = conn.execute(
-        "SELECT menu_name, price, category, image FROM menu_prices ORDER BY menu_name"
+        "SELECT menu_name, price, category, image, description, is_recommended FROM menu_prices ORDER BY menu_name"
     ).fetchall()
     conn.close()
-    return pd.DataFrame(rows, columns=["menu_name", "price", "category", "image"])
+    return pd.DataFrame(rows, columns=["menu_name", "price", "category", "image", "description", "is_recommended"])
 
 
 # ---------------- Orders (สั่งอาหารผ่าน QR) ----------------
