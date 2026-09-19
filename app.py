@@ -161,13 +161,7 @@ p, span, label, .stMarkdown, .stCaption {{
 
 
 
-@st.cache_resource
-def _init_db_once():
-    init_db()
-    return True
-
-
-_init_db_once()
+init_db()  # เช็ค/อัปเดตโครงสร้างฐานข้อมูลทุกครั้ง กัน migration คอลัมน์ใหม่ถูกข้าม (เดิมแคชไว้แล้วมีปัญหา)
 
 
 def complete_order(order_id, table_no):
