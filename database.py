@@ -66,7 +66,8 @@ def init_db():
             size_group TEXT,
             size_label TEXT,
             time_from TEXT,
-            time_to TEXT
+            time_to TEXT,
+            days_available TEXT
         )
     """)
 
@@ -88,6 +89,8 @@ def init_db():
         conn.execute("ALTER TABLE menu_prices ADD COLUMN time_from TEXT")
     if "time_to" not in existing_columns:
         conn.execute("ALTER TABLE menu_prices ADD COLUMN time_to TEXT")
+    if "days_available" not in existing_columns:
+        conn.execute("ALTER TABLE menu_prices ADD COLUMN days_available TEXT")
 
     # ตารางบันทึกการขายแยกรายเมนู
     conn.execute("""
@@ -251,7 +254,7 @@ def delete_recipe_item(recipe_id):
 
 # ---------------- Menu price + selling ----------------
 
-def set_menu_price(menu_name, price, category="อื่นๆ", image_bytes=None, description=None, is_recommended=False, size_group=None, size_label=None, time_from=None, time_to=None):
+def set_menu_price(menu_name, price, category="อื่นๆ", image_bytes=None, description=None, is_recommended=False, size_group=None, size_label=None, time_from=None, time_to=None, days_available=None):
     """
     image_bytes: ถ้าไม่ส่งมา (None) จะไม่ไปทับรูปเดิมที่เคยอัปโหลดไว้
     description: คำอธิบายเพิ่มเติม เช่น รายละเอียดส่วนประกอบในเซต (ไม่บังคับ)
@@ -259,13 +262,14 @@ def set_menu_price(menu_name, price, category="อื่นๆ", image_bytes=Non
     size_group: ชื่อกลุ่มไซส์ (ไม่บังคับ) — แถวที่มี size_group เดียวกันจะถูกรวมแสดงเป็นเมนูเดียว ให้ลูกค้าเลือกไซส์เอง
     size_label: ป้ายไซส์ของแถวนี้ เช่น "ชามเล็ก" (ใส่คู่กับ size_group)
     time_from, time_to: ช่วงเวลาที่เมนูนี้จะโชว์ (รูปแบบ "HH:MM") ถ้าไม่ใส่ = โชว์ตลอดเวลา
-        ใช้กับราคาที่เปลี่ยนตามเวลา เช่น บุฟเฟ่ก่อน 18:00 ราคาหนึ่ง หลัง 18:00 อีกราคาหนึ่ง
-        ระบบเช็คจากเวลาจริงอัตโนมัติ ลูกค้าเลือกเองไม่ได้
+    days_available: "ทุกวัน" / "วันธรรมดา" / "เสาร์-อาทิตย์" (ไม่ใส่ = ทุกวัน) เอาไว้คู่กับ time_from/time_to
+        ใช้กับราคาที่เปลี่ยนตามวัน/เวลา เช่น บุฟเฟ่วันธรรมดาเปิด 14:00 vs เสาร์-อาทิตย์เปิด 12:00
+        ระบบเช็คจากวันเวลาจริงอัตโนมัติ ลูกค้าเลือกเองไม่ได้
     """
     conn = get_connection()
     conn.execute("""
-        INSERT INTO menu_prices (menu_name, price, category, image, description, is_recommended, size_group, size_label, time_from, time_to)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO menu_prices (menu_name, price, category, image, description, is_recommended, size_group, size_label, time_from, time_to, days_available)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(menu_name) DO UPDATE SET
             price = excluded.price,
             category = excluded.category,
@@ -275,8 +279,9 @@ def set_menu_price(menu_name, price, category="อื่นๆ", image_bytes=Non
             size_group = excluded.size_group,
             size_label = excluded.size_label,
             time_from = excluded.time_from,
-            time_to = excluded.time_to
-    """, (menu_name, price, category, image_bytes, description, 1 if is_recommended else 0, size_group, size_label, time_from, time_to))
+            time_to = excluded.time_to,
+            days_available = excluded.days_available
+    """, (menu_name, price, category, image_bytes, description, 1 if is_recommended else 0, size_group, size_label, time_from, time_to, days_available))
     conn.commit()
     conn.close()
 
@@ -360,10 +365,10 @@ def get_menu_list():
     """เอาไว้แสดงเมนู+ราคา+รูป+คำอธิบาย+แนะนำ+กลุ่มไซส์+ช่วงเวลา ให้ลูกค้าดูตอนสั่งอาหารผ่าน QR"""
     conn = get_connection()
     rows = conn.execute(
-        "SELECT menu_name, price, category, image, description, is_recommended, size_group, size_label, time_from, time_to FROM menu_prices ORDER BY menu_name"
+        "SELECT menu_name, price, category, image, description, is_recommended, size_group, size_label, time_from, time_to, days_available FROM menu_prices ORDER BY menu_name"
     ).fetchall()
     conn.close()
-    return pd.DataFrame(rows, columns=["menu_name", "price", "category", "image", "description", "is_recommended", "size_group", "size_label", "time_from", "time_to"])
+    return pd.DataFrame(rows, columns=["menu_name", "price", "category", "image", "description", "is_recommended", "size_group", "size_label", "time_from", "time_to", "days_available"])
 
 
 # ---------------- Orders (สั่งอาหารผ่าน QR) ----------------
