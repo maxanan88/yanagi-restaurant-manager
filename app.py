@@ -161,7 +161,18 @@ p, span, label, .stMarkdown, .stCaption {{
 
 
 
-init_db()  # เช็ค/อัปเดตโครงสร้างฐานข้อมูลทุกครั้ง กัน migration คอลัมน์ใหม่ถูกข้าม (เดิมแคชไว้แล้วมีปัญหา)
+# DB_SCHEMA_VERSION: เพิ่มเลขนี้ทุกครั้งที่แก้โครงสร้างตาราง (เพิ่ม/ลบคอลัมน์) ใน database.py
+# เพื่อบังคับให้เช็ค/อัปเดตโครงสร้างฐานข้อมูลใหม่ ป้องกันปัญหาแคชค้างจนคอลัมน์ใหม่ไม่ถูกสร้าง
+DB_SCHEMA_VERSION = "v2"
+
+
+@st.cache_resource
+def _init_db_once(_schema_version):
+    init_db()
+    return True
+
+
+_init_db_once(DB_SCHEMA_VERSION)
 
 
 def complete_order(order_id, table_no):
@@ -261,8 +272,10 @@ if query_params.get("page") == "order":
             else:
                 st.info(f"ยังไม่พบเมนูในโซน '{zone_filter}' — แสดงเมนูทั้งหมดแทนครับ")
 
-        # กรองเมนูที่มีช่วงเวลากำกับ (เช่น บุฟเฟ่ก่อน/หลัง 18:00) ตามเวลาจริงตอนนี้ ลูกค้าเลือกเองไม่ได้
+        # กรองเมนูที่มีช่วงเวลา/วันกำกับ (เช่น บุฟเฟ่วันธรรมดา 14:00-18:00 vs เสาร์-อาทิตย์ 12:00-18:00) ตามวันเวลาจริงตอนนี้ ลูกค้าเลือกเองไม่ได้
         current_time = datetime.now().time()
+        current_weekday = datetime.now().weekday()  # 0=จันทร์ ... 5=เสาร์ 6=อาทิตย์
+        is_weekend_now = current_weekday >= 5
 
         def _time_ok(row):
             tf, tt = row.get("time_from"), row.get("time_to")
@@ -275,7 +288,20 @@ if query_params.get("page") == "order":
             except ValueError:
                 return True
 
-        display_menu_df = display_menu_df[display_menu_df.apply(_time_ok, axis=1)]
+        def _day_ok(row):
+            d = row.get("days_available")
+            if not d or pd.isna(d) or str(d).strip() in ("", "ทุกวัน"):
+                return True
+            d_norm = str(d).strip()
+            if d_norm in ("วันธรรมดา", "จันทร์-ศุกร์"):
+                return not is_weekend_now
+            if d_norm in ("เสาร์-อาทิตย์", "เสาร์อาทิตย์"):
+                return is_weekend_now
+            return True
+
+        display_menu_df = display_menu_df[
+            display_menu_df.apply(_time_ok, axis=1) & display_menu_df.apply(_day_ok, axis=1)
+        ]
 
         table_no = st.text_input("หมายเลขโต๊ะ", value=prefill_table)
         st.write("เลือกเมนูที่ต้องการสั่ง:")
@@ -584,13 +610,15 @@ elif page == "🍽️ เมนูอาหาร":
             )
 
         use_time_window = st.checkbox("⏰ เมนูนี้โชว์เฉพาะบางช่วงเวลา (เช่น ราคาก่อน/หลัง 18:00)")
-        time_from_val, time_to_val = None, None
+        time_from_val, time_to_val, days_available_val = None, None, None
         if use_time_window:
             col_tf, col_tt = st.columns(2)
             with col_tf:
                 time_from_val = st.time_input("เวลาเริ่มโชว์เมนูนี้")
             with col_tt:
                 time_to_val = st.time_input("เวลาสิ้นสุด")
+            days_choice = st.selectbox("วันที่ขาย", ["ทุกวัน", "วันธรรมดา (จ-ศ)", "เสาร์-อาทิตย์"])
+            days_available_val = {"ทุกวัน": "ทุกวัน", "วันธรรมดา (จ-ศ)": "วันธรรมดา", "เสาร์-อาทิตย์": "เสาร์-อาทิตย์"}[days_choice]
 
         description = st.text_area(
             "คำอธิบายเพิ่มเติม (ไม่บังคับ)",
@@ -621,6 +649,7 @@ elif page == "🍽️ เมนูอาหาร":
                     size_group.strip() or None, size_label.strip() or None,
                     time_from_val.strftime("%H:%M") if time_from_val else None,
                     time_to_val.strftime("%H:%M") if time_to_val else None,
+                    days_available_val,
                 )
                 st.success(f"บันทึกเมนู '{menu_name}' (หมวด {final_category}) เรียบร้อยแล้ว! ✅")
                 st.rerun()
@@ -636,20 +665,23 @@ elif page == "🍽️ เมนูอาหาร":
                 "ชาชูเมน (ชามเล็ก) / Chashumen (Regular)",
                 "ชาชูเมน (ชามใหญ่) / Chashumen (Large)",
                 "เซตอูเมะ / Sushi Set Ume",
-                "บุฟเฟ่ (ก่อน 18:00) / Buffet (Before 6PM)",
-                "บุฟเฟ่ (หลัง 18:00) / Buffet (After 6PM)",
+                "บุฟเฟ่ (วันธรรมดา ก่อน 18:00)",
+                "บุฟเฟ่ (วันธรรมดา หลัง 18:00)",
+                "บุฟเฟ่ (เสาร์-อาทิตย์ ก่อน 18:00)",
+                "บุฟเฟ่ (เสาร์-อาทิตย์ หลัง 18:00)",
             ],
             "หมวดหมู่": [
                 "อาลาคาร์ท - เมนู ราเมง", "อาลาคาร์ท - เมนู ราเมง", "อาลาคาร์ท - เซตซูชิ",
-                "บุฟเฟ่", "บุฟเฟ่",
+                "บุฟเฟ่", "บุฟเฟ่", "บุฟเฟ่", "บุฟเฟ่",
             ],
-            "ราคา": [160, 240, 420, 279, 345],
-            "คำอธิบาย": ["", "", "ฮามาจิ / แซลมอน / กุ้งอากะ / โฮทาเตะ / อุนางิ", "", ""],
-            "แนะนำ": ["แนะนำ", "แนะนำ", "", "", ""],
-            "กลุ่มไซส์": ["ชาชูเมน", "ชาชูเมน", "", "", ""],
-            "ไซส์": ["ชามเล็ก", "ชามใหญ่", "", "", ""],
-            "เวลาเริ่ม": ["", "", "", "00:00", "18:00"],
-            "เวลาสิ้นสุด": ["", "", "", "18:00", "23:59"],
+            "ราคา": [160, 240, 420, 279, 345, 279, 345],
+            "คำอธิบาย": ["", "", "ฮามาจิ / แซลมอน / กุ้งอากะ / โฮทาเตะ / อุนางิ", "", "", "", ""],
+            "แนะนำ": ["แนะนำ", "แนะนำ", "", "", "", "", ""],
+            "กลุ่มไซส์": ["ชาชูเมน", "ชาชูเมน", "", "", "", "", ""],
+            "ไซส์": ["ชามเล็ก", "ชามใหญ่", "", "", "", "", ""],
+            "เวลาเริ่ม": ["", "", "", "14:00", "18:00", "12:00", "18:00"],
+            "เวลาสิ้นสุด": ["", "", "", "18:00", "23:00", "18:00", "23:00"],
+            "วันที่ขาย": ["", "", "", "วันธรรมดา", "วันธรรมดา", "เสาร์-อาทิตย์", "เสาร์-อาทิตย์"],
         })
         template_buf = io.BytesIO()
         template_df.to_csv(template_buf, index=False, encoding="utf-8-sig")
@@ -698,6 +730,9 @@ elif page == "🍽️ เมนูอาหาร":
                         has_rec_col = "แนะนำ" in bulk_df.columns
                         has_sg_col = "กลุ่มไซส์" in bulk_df.columns
                         has_sl_col = "ไซส์" in bulk_df.columns
+                        has_tf_col = "เวลาเริ่ม" in bulk_df.columns
+                        has_tt_col = "เวลาสิ้นสุด" in bulk_df.columns
+                        has_da_col = "วันที่ขาย" in bulk_df.columns
                         for _, bulk_row in bulk_df.iterrows():
                             row_name = str(bulk_row["ชื่อเมนู"]).strip()
                             row_category = str(bulk_row["หมวดหมู่"]).strip()
@@ -717,11 +752,21 @@ elif page == "🍽️ เมนูอาหาร":
                             row_sl = None
                             if has_sl_col and pd.notna(bulk_row["ไซส์"]):
                                 row_sl = str(bulk_row["ไซส์"]).strip() or None
+                            row_tf = None
+                            if has_tf_col and pd.notna(bulk_row["เวลาเริ่ม"]):
+                                row_tf = str(bulk_row["เวลาเริ่ม"]).strip() or None
+                            row_tt = None
+                            if has_tt_col and pd.notna(bulk_row["เวลาสิ้นสุด"]):
+                                row_tt = str(bulk_row["เวลาสิ้นสุด"]).strip() or None
+                            row_da = None
+                            if has_da_col and pd.notna(bulk_row["วันที่ขาย"]):
+                                row_da = str(bulk_row["วันที่ขาย"]).strip() or None
                             if row_name and row_category:
                                 set_menu_price(
                                     row_name, row_price, row_category,
                                     description=row_desc, is_recommended=row_rec,
                                     size_group=row_sg, size_label=row_sl,
+                                    time_from=row_tf, time_to=row_tt, days_available=row_da,
                                 )
                                 imported_count += 1
                         st.success(f"นำเข้าเมนูสำเร็จ {imported_count} รายการ ✅")
@@ -746,18 +791,21 @@ elif page == "🍽️ เมนูอาหาร":
         if bulk_images:
             if st.button("📥 นำเข้ารูปเมนูทั้งหมดนี้"):
                 current_menu_df = get_menu_list()
-                existing_menu_names = set(current_menu_df["menu_name"])
+                # จับคู่ได้ 2 แบบ: ชื่อไฟล์ตรงกับชื่อเต็ม หรือตรงกับแค่ส่วนแรกก่อน "/" (เพราะชื่อไฟล์ใส่ "/" ไม่ได้)
+                exact_name_map = {name: name for name in current_menu_df["menu_name"]}
+                primary_key_map = {name.split("/")[0].strip(): name for name in current_menu_df["menu_name"]}
                 matched_count = 0
                 unmatched_files = []
                 for img_file in bulk_images:
-                    file_menu_name = os.path.splitext(img_file.name)[0].strip()
-                    if file_menu_name in existing_menu_names:
+                    file_stem = os.path.splitext(img_file.name)[0].strip()
+                    matched_menu_name = exact_name_map.get(file_stem) or primary_key_map.get(file_stem)
+                    if matched_menu_name:
                         img = Image.open(img_file)
                         img.thumbnail((600, 600))
                         img_buf = io.BytesIO()
                         img.convert("RGB").save(img_buf, format="JPEG", quality=85)
-                        matched_row = current_menu_df[current_menu_df["menu_name"] == file_menu_name].iloc[0]
-                        set_menu_price(file_menu_name, matched_row["price"], matched_row["category"], img_buf.getvalue())
+                        matched_row = current_menu_df[current_menu_df["menu_name"] == matched_menu_name].iloc[0]
+                        set_menu_price(matched_menu_name, matched_row["price"], matched_row["category"], img_buf.getvalue())
                         matched_count += 1
                     else:
                         unmatched_files.append(img_file.name)
