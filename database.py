@@ -169,6 +169,14 @@ def delete_transaction(transaction_id):
     conn.close()
 
 
+def delete_all_transactions():
+    """ลบรายการรับ-จ่ายทางการเงินทั้งหมดทีเดียว (ลบถาวร กู้คืนไม่ได้)"""
+    conn = get_connection()
+    conn.execute("DELETE FROM transactions")
+    conn.commit()
+    conn.close()
+
+
 def get_monthly_expense_by_category():
     """สรุปรายจ่ายรวมรายเดือน แยกตามหมวดหมู่ค่าใช้จ่าย (เอาไว้เทียบเดือนต่อเดือน เช่น ค่าวัตถุดิบขึ้นไหม)"""
     conn = get_connection()
@@ -216,6 +224,14 @@ def add_or_update_item(item_name, quantity, unit, low_stock_threshold, mode="add
 def delete_inventory_item(item_name):
     conn = get_connection()
     conn.execute("DELETE FROM inventory WHERE item_name = ?", (item_name,))
+    conn.commit()
+    conn.close()
+
+
+def delete_all_inventory():
+    """ลบวัตถุดิบในสต็อกทั้งหมดทีเดียว (ลบถาวร กู้คืนไม่ได้)"""
+    conn = get_connection()
+    conn.execute("DELETE FROM inventory")
     conn.commit()
     conn.close()
 
@@ -309,6 +325,14 @@ def delete_menu_item(menu_name):
     conn.close()
 
 
+def delete_all_menu_items():
+    """ลบเมนูทั้งหมดทีเดียว — ใช้ตอนอยากเคลียร์ของเก่าทั้งหมดก่อนนำเข้าไฟล์ CSV ชุดใหม่ทับ (ลบถาวร กู้คืนไม่ได้)"""
+    conn = get_connection()
+    conn.execute("DELETE FROM menu_prices")
+    conn.commit()
+    conn.close()
+
+
 # ---------------- Sales log (สำหรับหน้ารายงาน) ----------------
 
 def add_sale_log(sale_date, menu_name, qty_sold, total_price):
@@ -328,6 +352,14 @@ def get_all_sales():
     ).fetchall()
     conn.close()
     return pd.DataFrame(rows, columns=["id", "date", "menu_name", "qty_sold", "total_price"])
+
+
+def delete_all_sales():
+    """ลบประวัติยอดขายทั้งหมดทีเดียว (ลบถาวร กู้คืนไม่ได้ — ใช้ตอนอยากล้างข้อมูลรายงานยอดขายเริ่มนับใหม่)"""
+    conn = get_connection()
+    conn.execute("DELETE FROM sales_log")
+    conn.commit()
+    conn.close()
 
 
 def get_sales_by_category():
