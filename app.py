@@ -244,7 +244,7 @@ _init_db_once(DB_SCHEMA_VERSION)
 def complete_order(order_id, table_no):
     """ตอนกด 'เสร็จแล้ว' ในหน้าครัว: บันทึกลงรายงานยอดขายเท่านั้น (สต็อกจัดการแยกต่างหาก)"""
     items_df = get_order_items(order_id)
-    sale_time = str(datetime.now())
+    sale_time = str(now_bangkok())
     for _, item in items_df.iterrows():
         line_total = item["qty"] * item["price"]
         add_sale_log(sale_time, item["menu_name"], int(item["qty"]), line_total)
@@ -496,8 +496,34 @@ if query_params.get("page") == "order":
                         collected.append((sel_row["menu_name"], q, float(sel_row["price"]), cat_name))
             return collected
 
-        # ---------------- หน้าเลือกหมวดหมู่ / รายการเมนูในหมวดที่เลือก ----------------
-        categories = sorted(display_menu_df["category"].dropna().unique().tolist())
+        # ---------------- แยก "ราคาบุฟเฟ่ต่อหัว/แพ็กเกจ" ออกจากรายการอาหารที่ต้องเลือก ----------------
+        # กติกา: เมนูที่ชื่อขึ้นต้นด้วยคำว่า "บุฟเฟ่" ถือเป็นราคาแพ็กเกจต่อหัว (ไม่ใช่อาหารที่เลือกกินทีละจาน)
+        # จะโชว์เป็นหัวข้อ/แบนเนอร์เด่นๆ ด้านบนสุดทันที ไม่ต้องกดเข้าหมวดหมู่ และไม่โชว์ข้อความช่วงเวลา (ก่อน/หลัง 18:00) ให้ลูกค้าเห็น
+        import re as _re
+
+        def _is_package_item(name):
+            return str(name).strip().startswith("บุฟเฟ่")
+
+        def _clean_package_label(name):
+            # ตัดวงเล็บที่มีคำว่า "ก่อน"/"หลัง" หรือรูปแบบเวลา (เช่น 18:00) ออก เหลือแต่ชื่อที่ลูกค้าอ่านแล้วเข้าใจง่าย
+            cleaned = _re.sub(r"\([^)]*(?:ก่อน|หลัง|\d{1,2}:\d{2})[^)]*\)", "", str(name)).strip()
+            return cleaned or str(name)
+
+        is_package_mask = display_menu_df["menu_name"].apply(_is_package_item)
+        package_df = display_menu_df[is_package_mask]
+        food_df = display_menu_df[~is_package_mask]
+
+        if not package_df.empty:
+            for _, prow in package_df.iterrows():
+                with st.container(border=True):
+                    st.markdown(f"#### 🍽️ {_clean_package_label(prow['menu_name'])} — {prow['price']:,.0f} บาท")
+                    st.number_input(
+                        "จำนวน (ท่าน)", min_value=0, step=1,
+                        key=f"cust_qty_{prow['menu_name']}",
+                    )
+
+        # ---------------- หน้าเลือกหมวดหมู่ / รายการเมนูในหมวดที่เลือก (เฉพาะอาหารจริง ไม่รวมราคาแพ็กเกจ) ----------------
+        categories = sorted(food_df["category"].dropna().unique().tolist())
         category_labels = {c: f"{_category_icon(c)} {_pretty_category(c)}" for c in categories}
         cat_state_key = f"order_cat::{effective_zone}"
         selected_category = st.session_state.get(cat_state_key)
@@ -512,7 +538,9 @@ if query_params.get("page") == "order":
         if selected_category is None and len(categories) == 1:
             selected_category = categories[0]  # หมวดเดียวในโซนนี้ ไม่ต้องให้กดเลือกซ้ำ เข้าเมนูตรงๆ เลย
 
-        if selected_category is None:
+        if not categories:
+            pass  # โซนนี้มีแต่ราคาแพ็กเกจ ไม่มีอาหารให้เลือกเพิ่ม (แสดงแบนเนอร์ด้านบนไปแล้ว)
+        elif selected_category is None:
             st.write("เลือกหมวดหมู่ที่ต้องการสั่ง:")
             cols = st.columns(2)
             for i, cat in enumerate(categories):
@@ -526,7 +554,7 @@ if query_params.get("page") == "order":
                 st.rerun()
             st.markdown(f"### {category_labels[selected_category]}")
             _render_category_items(
-                selected_category, display_menu_df[display_menu_df["category"] == selected_category]
+                selected_category, food_df[food_df["category"] == selected_category]
             )
 
         st.divider()
@@ -1140,7 +1168,7 @@ elif page == "💰 การเงิน":
     with st.form("expense_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
-            exp_date = st.date_input("วันที่")
+            exp_date = st.date_input("วันที่", value=now_bangkok().date())
             exp_category = st.selectbox("หมวดค่าใช้จ่าย", EXPENSE_CATEGORIES)
         with col2:
             exp_amount = st.number_input("จำนวนเงิน (บาท)", min_value=0.0, step=10.0)
