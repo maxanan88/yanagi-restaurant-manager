@@ -523,7 +523,39 @@ if query_params.get("page") == "order":
                     )
 
         # ---------------- หน้าเลือกหมวดหมู่ / รายการเมนูในหมวดที่เลือก (เฉพาะอาหารจริง ไม่รวมราคาแพ็กเกจ) ----------------
-        categories = sorted(food_df["category"].dropna().unique().tolist())
+        # ลำดับหมวดหมู่ตามที่ร้านต้องการ: บุฟเฟ่เบียร์ → ราเมง → ท็อปปิ้งราเมง → อาลาคาร์ทที่เหลือ → บุฟเฟ่ของทอด → เครื่องดื่มทุกชนิด (ท้ายสุดเสมอ)
+        _CATEGORY_ORDER = [
+            (1, ["บุฟเฟ่เบียร์", "beer buffet"]),
+            (3, ["ท็อปปิ้งราเมง", "ท็อปปิ้ง"]),  # เช็คก่อน "ราเมง" ทั่วไป กันโดนจับคู่ผิดหมวด (ลำดับเช็คไม่ใช่ลำดับแสดงผล)
+            (2, ["ราเมง", "ramen"]),
+            (10, ["appetizer"]),
+            (20, ["ซาซิมิ", "sashimi"]),
+            (30, ["ซูชิเซต"]),
+            (31, ["ซูชิ", "sushi"]),
+            (40, ["ย่างเสียบไม้", "yaki"]),
+            (50, ["คุชิคัตสึ"]),
+            (55, ["ของทอด"]),  # บุฟเฟ่ของทอด แยกจากคุชิคัตสึ แต่ยังต้องมาก่อนเครื่องดื่มเสมอ
+            (60, ["อาหารจานหลัก", "main"]),
+            (70, ["ซุป", "soup"]),
+            (900, ["เบียร์", "beer"]),  # เครื่องดื่มเบียร์ทั่วไป (คนละตัวกับ "บุฟเฟ่เบียร์" ที่จับไปแล้วด้านบน)
+            (910, ["ไวน์", "wine"]),
+            (920, ["สาเก", "sake"]),
+            (930, ["โซจู", "soju"]),
+            (940, ["ค็อกเทล", "cocktail"]),
+            (950, ["เครื่องดื่ม", "mixer", "spirit", "drink"]),
+        ]
+
+        def _category_sort_priority(cat):
+            low = str(cat).lower()
+            for priority, keywords in _CATEGORY_ORDER:
+                if any(k.lower() in low for k in keywords):
+                    return priority
+            return 500  # หมวดที่ไม่เข้าเงื่อนไขไหนเลย ให้อยู่หลังอาหารหลัก แต่ก่อนเครื่องดื่ม
+
+        categories = sorted(
+            food_df["category"].dropna().unique().tolist(),
+            key=lambda c: (_category_sort_priority(c), c),
+        )
         category_labels = {c: f"{_category_icon(c)} {_pretty_category(c)}" for c in categories}
         cat_state_key = f"order_cat::{effective_zone}"
         selected_category = st.session_state.get(cat_state_key)
