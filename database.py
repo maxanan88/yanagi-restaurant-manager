@@ -1,7 +1,16 @@
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import streamlit as st
 import pandas as pd
 import libsql
+
+# เวลาไทยจริง (ห้ามใช้ datetime.now() เฉยๆ เพราะเซิร์ฟเวอร์ Streamlit Cloud รันเวลา UTC
+# ถ้าไม่ล็อก timezone ตรงนี้ เวลาออเดอร์/เวลาเรียกพนักงานจะเพี้ยนไป 7 ชั่วโมงจากเวลาไทยจริง)
+BANGKOK_TZ = ZoneInfo("Asia/Bangkok")
+
+
+def now_bangkok_str():
+    return str(datetime.now(BANGKOK_TZ))
 
 # ---------------- เชื่อมต่อฐานข้อมูล Turso (Cloud) ----------------
 # เปลี่ยนจาก SQLite ไฟล์ในเครื่อง (หายทุกครั้งที่แอป redeploy/restart บน Streamlit Cloud)
@@ -419,7 +428,7 @@ def create_order(table_no, items):
     conn = get_connection()
     conn.execute(
         "INSERT INTO orders (table_no, created_at, status) VALUES (?, ?, ?)",
-        (table_no, str(datetime.now()), "รอทำ")
+        (table_no, now_bangkok_str(), "รอทำ")
     )
     order_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -480,7 +489,7 @@ def create_staff_call(room_name):
     conn = get_connection()
     conn.execute(
         "INSERT INTO staff_calls (room_name, created_at, status) VALUES (?, ?, ?)",
-        (room_name, str(datetime.now()), "pending")
+        (room_name, now_bangkok_str(), "pending")
     )
     conn.commit()
     conn.close()
