@@ -1,4 +1,5 @@
 from datetime import datetime
+from zoneinfo import ZoneInfo  # ต้องมี "tzdata" ใน requirements.txt ด้วย ไม่งั้น Asia/Bangkok อาจหาไม่เจอบนเซิร์ฟเวอร์
 import os
 import io
 import base64
@@ -16,6 +17,58 @@ from database import (
     create_order, get_active_orders, get_order_items, get_active_order_items_by_table, update_order_status,
     create_staff_call, get_pending_staff_calls, acknowledge_staff_call
 )
+
+# เวลาไทยจริง (ห้ามใช้ datetime.now() เฉยๆ เพราะเซิร์ฟเวอร์ Streamlit Cloud รันเวลา UTC
+# ถ้าไม่ล็อก timezone ตรงนี้ ราคาบุฟเฟ่ตามช่วงเวลาจะเพี้ยนไป 7 ชั่วโมงจากเวลาหน้าร้านจริง)
+BANGKOK_TZ = ZoneInfo("Asia/Bangkok")
+
+
+def now_bangkok():
+    return datetime.now(BANGKOK_TZ)
+
+
+# ---------------- ระบบโซน (ใช้คู่กับคอลัมน์ "zones" ของแต่ละเมนู) ----------------
+# key ทางซ้าย = ค่าที่ใช้เก็บในคอลัมน์ zones ของเมนู และใช้เป็นค่า ?zone= ใน QR
+# value ทางขวา = ป้ายที่โชว์ให้แอดมินเห็นตอนตั้งค่าเมนู/สร้าง QR
+ZONE_LABELS = {
+    "ramen": "🍜 ราเมง (อาลาคาร์ท)",
+    "buffet_izakaya": "🍢 บุฟเฟ่อาหาร Izakaya",
+    "vip_nabe_buffet": "🍲 VIP นาเบะ - บุฟเฟ่",
+    "vip_nabe_alacarte": "🍢 VIP นาเบะ - อาลาคาร์ท",
+}
+UNIVERSAL_ZONE = "all"  # เมนูที่ติดโซนนี้ = โชว์ให้ทุกโซนเห็นอัตโนมัติ (ใช้กับเครื่องดื่มทั่วไป)
+
+# ตัวเลือกโซนตอนสร้าง QR — "vip" คือโซนรวมของห้อง VIP ที่ลูกค้าจะเห็นปุ่มเลือกโหมดเองหน้างาน
+QR_ZONE_OPTIONS = {
+    "": "— ไม่ระบุโซน (เห็นเมนูทั้งหมด) —",
+    "ramen": ZONE_LABELS["ramen"],
+    "buffet_izakaya": ZONE_LABELS["buffet_izakaya"],
+    "vip": "🛋️ ห้อง VIP (นาเบะ — ให้ลูกค้าเลือกบุฟเฟ่/อาลาคาร์ทเอง)",
+}
+# โซน VIP รวม ให้ลูกค้าเลือกโหมดเองหน้างาน ก่อนเห็นเมนู
+VIP_MODE_OPTIONS = {
+    "vip_nabe_buffet": "🍲 บุฟเฟ่นาเบะ",
+    "vip_nabe_alacarte": "🍢 นาเบะ อาลาคาร์ท",
+}
+
+# limit ของย่าง+ของทอด ในโซนบุฟเฟ่ Izakaya (รวมกันไม่เกิน 5 ไม้ต่อการสั่ง 1 รอบ แต่สั่งได้หลายรอบ)
+SKEWER_FRIED_ORDER_LIMIT = 5
+SKEWER_FRIED_CATEGORIES = {"บุฟเฟ่ / Buffet - ปิ้งย่างเสีบไม้", "บุฟเฟ่ / Buffet - ของทอด"}
+
+
+def _zone_list(zones_value):
+    """แปลงค่า zones ที่เก็บเป็น string คั่นจุลภาค ให้เป็น list ของ zone key"""
+    if not zones_value or (isinstance(zones_value, float) and pd.isna(zones_value)):
+        return []
+    return [z.strip() for z in str(zones_value).split(",") if z.strip()]
+
+
+def _menu_in_zone(zones_value, zone_key):
+    """เมนูนี้ขายในโซนที่ระบุไหม (หรือติด 'all' ที่โชว์ทุกโซน) — เมนูที่ยังไม่ได้ตั้งโซนเลย (ค่าว่าง) จะโชว์ทุกโซนไปก่อน กันเมนูหายจากระบบ"""
+    zl = _zone_list(zones_value)
+    if not zl:
+        return True
+    return zone_key in zl or UNIVERSAL_ZONE in zl
 
 # ---------------- ตั้งค่าร้าน (แก้ตรงนี้ให้เป็นร้านของพี่ได้เลย) ----------------
 RESTAURANT_NAME = "YANAGI"
@@ -230,7 +283,7 @@ if query_params.get("page") == "order":
     contact = CONTACT_INFO.get(brand_key, CONTACT_INFO["default"])
     prefill_table = query_params.get("table", "")
     zone_filter = query_params.get("zone", "").strip()
-    is_vip_room = ("nabe" in zone_filter.lower()) or ("vip" in zone_filter.lower())
+    is_vip_room = zone_filter in ("vip", "vip_nabe_buffet", "vip_nabe_alacarte")
 
     col_title, col_contact = st.columns([3, 1])
     with col_title:
@@ -250,31 +303,35 @@ if query_params.get("page") == "order":
 
     st.caption("ราคาทั้งหมดยังไม่รวม Service Charge 10% และ VAT 7% (All prices are subject to 10% service charge and 7% VAT)")
 
-    # หมวดเครื่องดื่มทั่วไป ให้เห็นได้ทุกโซนเสมอ (ไม่ผูกกับโซนไหนโซนหนึ่ง)
-    # ยกเว้น "บุฟเฟ่เบียร์"/"บุฟเฟ่ไวน์" ซึ่งขึ้นต้นด้วยคำว่า "บุฟเฟ่" อยู่แล้ว เลยกรองเข้าโซนบุฟเฟ่ให้เองโดยอัตโนมัติ
-    UNIVERSAL_CATEGORIES = ["เครื่องดื่ม", "น้ำ", "เหล้า", "เบียร์", "ไวน์", "สปาร์กลิ้ง"]
     menu_df = get_menu_list()
 
     if menu_df.empty:
         st.info("ร้านยังไม่ได้เปิดรับออเดอร์ในขณะนี้ครับ")
     else:
-        display_menu_df = menu_df
-        if zone_filter:
-            is_universal_drink = menu_df["category"].fillna("").apply(
-                lambda c: any(c.startswith(u) for u in UNIVERSAL_CATEGORIES)
+        # โซน "vip" คือโซนรวม — ให้ลูกค้าเลือกโหมดเอง (บุฟเฟ่นาเบะ / นาเบะ อาลาคาร์ท) ก่อนเห็นเมนู
+        effective_zone = zone_filter
+        if zone_filter == "vip":
+            st.write("เลือกรูปแบบการทานของโต๊ะนี้:")
+            vip_mode_label = st.radio(
+                "เลือกรูปแบบการทาน", list(VIP_MODE_OPTIONS.values()),
+                horizontal=True, label_visibility="collapsed", key="vip_mode_choice",
             )
-            zoned_df = menu_df[
-                menu_df["category"].fillna("").str.contains(zone_filter, regex=False)
-                | is_universal_drink
-            ]
+            effective_zone = [k for k, v in VIP_MODE_OPTIONS.items() if v == vip_mode_label][0]
+        elif zone_filter in VIP_MODE_OPTIONS:
+            effective_zone = zone_filter  # เผื่อ QR เก่าที่ชี้ตรงมาโหมดใดโหมดหนึ่งอยู่แล้ว
+
+        display_menu_df = menu_df
+        if effective_zone:
+            zoned_df = menu_df[menu_df["zones"].apply(lambda z: _menu_in_zone(z, effective_zone))]
             if not zoned_df.empty:
                 display_menu_df = zoned_df
             else:
-                st.info(f"ยังไม่พบเมนูในโซน '{zone_filter}' — แสดงเมนูทั้งหมดแทนครับ")
+                st.info(f"ยังไม่พบเมนูในโซนนี้ — แสดงเมนูทั้งหมดแทนครับ")
 
-        # กรองเมนูที่มีช่วงเวลา/วันกำกับ (เช่น บุฟเฟ่วันธรรมดา 14:00-18:00 vs เสาร์-อาทิตย์ 12:00-18:00) ตามวันเวลาจริงตอนนี้ ลูกค้าเลือกเองไม่ได้
-        current_time = datetime.now().time()
-        current_weekday = datetime.now().weekday()  # 0=จันทร์ ... 5=เสาร์ 6=อาทิตย์
+        # กรองเมนูที่มีช่วงเวลา/วันกำกับ (เช่น บุฟเฟ่วันธรรมดา 14:00-18:00 vs เสาร์-อาทิตย์ 12:00-18:00)
+        # ตามวันเวลาไทยจริงตอนนี้ (ล็อก timezone Asia/Bangkok กันเซิร์ฟเวอร์เข้าใจผิดว่าเป็นเวลา UTC) ลูกค้าเลือกเองไม่ได้
+        current_time = now_bangkok().time()
+        current_weekday = now_bangkok().weekday()  # 0=จันทร์ ... 5=เสาร์ 6=อาทิตย์
         is_weekend_now = current_weekday >= 5
 
         def _time_ok(row):
@@ -333,7 +390,7 @@ if query_params.get("page") == "order":
                         f"{item_label} ({row['price']:,.0f} บาท)",
                         min_value=0, step=1, key=f"cust_qty_{row['menu_name']}"
                     )
-                    if row.get("description"):
+                    if pd.notna(row.get("description")) and str(row.get("description")).strip():
                         st.caption(row["description"])
 
             # เมนูปกติ ไม่มีหลายไซส์ — แสดงแบบเดิมทุกอย่าง
@@ -370,7 +427,7 @@ if query_params.get("page") == "order":
                         min_value=0, step=1,
                         key=f"cust_qty_sized_{category_name}_{size_group_name}",
                     )
-                    if selected_row.get("description"):
+                    if pd.notna(selected_row.get("description")) and str(selected_row.get("description")).strip():
                         st.caption(selected_row["description"])
 
         submitted_order = st.button("🛒 สั่งอาหาร")
@@ -380,10 +437,20 @@ if query_params.get("page") == "order":
                 (name, qty, float(menu_df[menu_df["menu_name"] == name]["price"].iloc[0]))
                 for name, qty in qty_inputs.items() if qty > 0
             ]
+            # limit ของย่าง+ของทอด รวมกันไม่เกิน 5 ไม้ต่อการสั่ง 1 รอบ (เฉพาะโซนบุฟเฟ่ Izakaya) — สั่งรอบใหม่ได้เรื่อยๆ แค่ไม่เกิน 5 ต่อรอบ
+            skewer_fried_qty = sum(
+                qty for name, qty, _ in items
+                if menu_df[menu_df["menu_name"] == name]["category"].iloc[0] in SKEWER_FRIED_CATEGORIES
+            )
             if not table_no:
                 st.error("กรุณากรอกหมายเลขโต๊ะ")
             elif not items:
                 st.error("กรุณาเลือกอย่างน้อย 1 เมนู")
+            elif effective_zone == "buffet_izakaya" and skewer_fried_qty > SKEWER_FRIED_ORDER_LIMIT:
+                st.error(
+                    f"ของย่าง+ของทอด สั่งได้ไม่เกิน {SKEWER_FRIED_ORDER_LIMIT} ไม้ต่อรอบครับ "
+                    f"(ตอนนี้เลือกไว้รวม {skewer_fried_qty} ไม้) — ลดจำนวนลงแล้วค่อยกดสั่งใหม่ได้เลย สั่งรอบต่อไปได้ไม่จำกัดครับ"
+                )
             else:
                 create_order(table_no, items)
                 total = sum(qty * price for _, qty, price in items)
@@ -596,6 +663,13 @@ elif page == "🍽️ เมนูอาหาร":
 
         price = st.number_input("ราคาขาย (บาท)", min_value=0.0, step=1.0)
 
+        zone_choices = st.multiselect(
+            "โซนที่ขายเมนูนี้ (เลือกได้หลายโซน)",
+            options=list(ZONE_LABELS.keys()) + [UNIVERSAL_ZONE],
+            format_func=lambda k: "🌐 ทุกโซน (เช่น เครื่องดื่มทั่วไป)" if k == UNIVERSAL_ZONE else ZONE_LABELS[k],
+            help="เมนูจะโชว์เฉพาะโซนที่เลือกไว้ตอนลูกค้าสแกน QR — ถ้าไม่เลือกเลย ระบบจะโชว์เมนูนี้ให้ทุกโซนไปก่อน (กันเมนูหายจากระบบ)",
+        )
+
         col_sg, col_sl = st.columns(2)
         with col_sg:
             size_group = st.text_input(
@@ -650,6 +724,7 @@ elif page == "🍽️ เมนูอาหาร":
                     time_from_val.strftime("%H:%M") if time_from_val else None,
                     time_to_val.strftime("%H:%M") if time_to_val else None,
                     days_available_val,
+                    ",".join(zone_choices) if zone_choices else None,
                 )
                 st.success(f"บันทึกเมนู '{menu_name}' (หมวด {final_category}) เรียบร้อยแล้ว! ✅")
                 st.rerun()
@@ -682,6 +757,10 @@ elif page == "🍽️ เมนูอาหาร":
             "เวลาเริ่ม": ["", "", "", "14:00", "18:00", "12:00", "18:00"],
             "เวลาสิ้นสุด": ["", "", "", "18:00", "23:00", "18:00", "23:00"],
             "วันที่ขาย": ["", "", "", "วันธรรมดา", "วันธรรมดา", "เสาร์-อาทิตย์", "เสาร์-อาทิตย์"],
+            "โซน": [
+                "ramen", "ramen", "ramen",
+                "buffet_izakaya", "buffet_izakaya", "buffet_izakaya", "buffet_izakaya",
+            ],
         })
         template_buf = io.BytesIO()
         template_df.to_csv(template_buf, index=False, encoding="utf-8-sig")
@@ -695,7 +774,9 @@ elif page == "🍽️ เมนูอาหาร":
             "เปิดไฟล์นี้ด้วย Excel แล้วพิมพ์รายการเมนูทั้งหมดต่อจากตัวอย่างได้เลย คอลัมน์ 'ชื่อเมนู', 'หมวดหมู่', 'ราคา' ต้องมีเป๊ะๆ "
             "ส่วนที่เหลือใส่หรือไม่ใส่ก็ได้ — 'แนะนำ' ติดป้ายเมนูแนะนำ, "
             "'กลุ่มไซส์'+'ไซส์' ใช้กับเมนูที่มีหลายไซส์ราคาต่างกัน (ใส่กลุ่มไซส์ชื่อเดียวกันทุกแถว แต่ไซส์ต่างกัน ลูกค้าจะเลือกไซส์เองได้), "
-            "'เวลาเริ่ม'+'เวลาสิ้นสุด' ใช้กับเมนูที่ราคาเปลี่ยนตามเวลา เช่น บุฟเฟ่ก่อน/หลัง 18:00 (รูปแบบ HH:MM) ระบบจะโชว์ราคาที่ถูกต้องให้อัตโนมัติตามเวลาจริง ลูกค้าเลือกเองไม่ได้ "
+            "'เวลาเริ่ม'+'เวลาสิ้นสุด' ใช้กับเมนูที่ราคาเปลี่ยนตามเวลา เช่น บุฟเฟ่ก่อน/หลัง 18:00 (รูปแบบ HH:MM) ระบบจะโชว์ราคาที่ถูกต้องให้อัตโนมัติตามเวลาจริง ลูกค้าเลือกเองไม่ได้, "
+            "'โซน' กำหนดว่าเมนูนี้ขายในโซนไหนได้บ้าง (คั่นด้วยจุลภาคถ้ามีหลายโซน) ใช้ค่าได้แก่ "
+            "ramen / buffet_izakaya / vip_nabe_buffet / vip_nabe_alacarte / all (all = โชว์ทุกโซน เช่น เครื่องดื่มทั่วไป) — ถ้าไม่ใส่ เมนูจะโชว์ทุกโซนไปก่อน "
             "แล้วค่อยอัปโหลดกลับเข้ามา จะเซฟเป็น .csv หรือ .xlsx ก็ได้"
         )
 
@@ -733,6 +814,7 @@ elif page == "🍽️ เมนูอาหาร":
                         has_tf_col = "เวลาเริ่ม" in bulk_df.columns
                         has_tt_col = "เวลาสิ้นสุด" in bulk_df.columns
                         has_da_col = "วันที่ขาย" in bulk_df.columns
+                        has_zone_col = "โซน" in bulk_df.columns
                         for _, bulk_row in bulk_df.iterrows():
                             row_name = str(bulk_row["ชื่อเมนู"]).strip()
                             row_category = str(bulk_row["หมวดหมู่"]).strip()
@@ -761,12 +843,16 @@ elif page == "🍽️ เมนูอาหาร":
                             row_da = None
                             if has_da_col and pd.notna(bulk_row["วันที่ขาย"]):
                                 row_da = str(bulk_row["วันที่ขาย"]).strip() or None
+                            row_zones = None
+                            if has_zone_col and pd.notna(bulk_row["โซน"]):
+                                row_zones = str(bulk_row["โซน"]).strip() or None
                             if row_name and row_category:
                                 set_menu_price(
                                     row_name, row_price, row_category,
                                     description=row_desc, is_recommended=row_rec,
                                     size_group=row_sg, size_label=row_sl,
                                     time_from=row_tf, time_to=row_tt, days_available=row_da,
+                                    zones=row_zones,
                                 )
                                 imported_count += 1
                         st.success(f"นำเข้าเมนูสำเร็จ {imported_count} รายการ ✅")
@@ -805,7 +891,18 @@ elif page == "🍽️ เมนูอาหาร":
                         img_buf = io.BytesIO()
                         img.convert("RGB").save(img_buf, format="JPEG", quality=85)
                         matched_row = current_menu_df[current_menu_df["menu_name"] == matched_menu_name].iloc[0]
-                        set_menu_price(matched_menu_name, matched_row["price"], matched_row["category"], img_buf.getvalue())
+                        # ส่งค่าฟิลด์อื่นๆ ที่มีอยู่เดิมกลับไปด้วย กันไม่ให้คำอธิบาย/โซน/ช่วงเวลาฯลฯ ถูกเซฟทับเป็นค่าว่าง ตอนแค่จะอัปเดตรูป
+                        set_menu_price(
+                            matched_menu_name, matched_row["price"], matched_row["category"], img_buf.getvalue(),
+                            description=(matched_row["description"] if pd.notna(matched_row["description"]) else None),
+                            is_recommended=bool(matched_row["is_recommended"]),
+                            size_group=(matched_row["size_group"] if pd.notna(matched_row["size_group"]) else None),
+                            size_label=(matched_row["size_label"] if pd.notna(matched_row["size_label"]) else None),
+                            time_from=(matched_row["time_from"] if pd.notna(matched_row["time_from"]) else None),
+                            time_to=(matched_row["time_to"] if pd.notna(matched_row["time_to"]) else None),
+                            days_available=(matched_row["days_available"] if pd.notna(matched_row["days_available"]) else None),
+                            zones=(matched_row["zones"] if pd.notna(matched_row["zones"]) else None),
+                        )
                         matched_count += 1
                     else:
                         unmatched_files.append(img_file.name)
@@ -1099,10 +1196,11 @@ elif page == "📱 QR สั่งอาหาร":
     st.divider()
     st.subheader("🔲 สร้าง QR ทีละโต๊ะ")
     table_number = st.text_input("หมายเลขโต๊ะ", value="1")
-    zone_input = st.text_input(
-        "โซน (ไม่บังคับ — ใส่ไว้ให้ QR โต๊ะนี้เปิดมาเจอเฉพาะเมนูของโซนนั้นเลย)",
-        placeholder="เช่น บุฟเฟ่ / อาลาคาร์ท / VIP",
-        help="พิมพ์ให้ตรงกับตัวอักษรตอนต้นของ 'หมวดหมู่' ที่ตั้งไว้ตอนเพิ่มเมนู เช่น ถ้าหมวดหมู่คือ 'บุฟเฟ่ - ของทอด' ให้พิมพ์แค่ 'บุฟเฟ่' ตรงนี้ ปล่อยว่างไว้ถ้าอยากให้เห็นเมนูทั้งหมด",
+    zone_choice_key = st.selectbox(
+        "โซนของโต๊ะนี้",
+        list(QR_ZONE_OPTIONS.keys()),
+        format_func=lambda k: QR_ZONE_OPTIONS[k],
+        help="เลือกโซนให้ตรงกับโต๊ะ — QR จะเปิดมาเจอเฉพาะเมนูของโซนนั้นเลย ถ้าเป็นห้อง VIP ลูกค้าจะได้เลือกเองอีกทีว่าจะทานบุฟเฟ่หรืออาลาคาร์ท",
     )
     brand_choice = st.selectbox(
         "ป้ายติดต่อร้านที่จะโชว์บนหน้าสั่งอาหาร",
@@ -1116,8 +1214,8 @@ elif page == "📱 QR สั่งอาหาร":
             st.error("กรุณากรอกที่อยู่เว็บก่อน")
         else:
             order_url = f"{base_url.rstrip('/')}/?page=order&table={table_number}"
-            if zone_input.strip():
-                order_url += f"&zone={urllib.parse.quote(zone_input.strip())}"
+            if zone_choice_key:
+                order_url += f"&zone={urllib.parse.quote(zone_choice_key)}"
             if brand_choice != "default":
                 order_url += f"&brand={brand_choice}"
             qr_img = qrcode.make(order_url)
@@ -1141,11 +1239,12 @@ elif page == "📱 QR สั่งอาหาร":
         start_table = st.number_input("โต๊ะเริ่มต้น", min_value=1, step=1, value=1)
     with col_b:
         end_table = st.number_input("โต๊ะสุดท้าย", min_value=1, step=1, value=10)
-    batch_zone_input = st.text_input(
-        "โซนของโต๊ะช่วงนี้ (ไม่บังคับ)",
-        placeholder="เช่น บุฟเฟ่ / อาลาคาร์ท / VIP",
+    batch_zone_choice_key = st.selectbox(
+        "โซนของโต๊ะช่วงนี้",
+        list(QR_ZONE_OPTIONS.keys()),
+        format_func=lambda k: QR_ZONE_OPTIONS[k],
         key="batch_zone",
-        help="ใช้ตอนโต๊ะช่วงนี้ทั้งหมดอยู่โซนเดียวกัน เช่น โต๊ะ 1-10 เป็นโซนบุฟเฟ่ทั้งหมด",
+        help="ใช้ตอนโต๊ะช่วงนี้ทั้งหมดอยู่โซนเดียวกัน เช่น โต๊ะ 1-10 เป็นโซนบุฟเฟ่ Izakaya ทั้งหมด",
     )
     batch_brand_choice = st.selectbox(
         "ป้ายติดต่อร้านสำหรับโต๊ะช่วงนี้",
@@ -1164,8 +1263,8 @@ elif page == "📱 QR สั่งอาหาร":
             cols = st.columns(4)
             for i, t_no in enumerate(table_numbers):
                 order_url = f"{base_url.rstrip('/')}/?page=order&table={t_no}"
-                if batch_zone_input.strip():
-                    order_url += f"&zone={urllib.parse.quote(batch_zone_input.strip())}"
+                if batch_zone_choice_key:
+                    order_url += f"&zone={urllib.parse.quote(batch_zone_choice_key)}"
                 if batch_brand_choice != "default":
                     order_url += f"&brand={batch_brand_choice}"
                 qr_img = qrcode.make(order_url)
