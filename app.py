@@ -10,10 +10,10 @@ import qrcode
 import streamlit.components.v1 as components
 from PIL import Image
 from database import (
-    init_db, add_or_update_item, delete_inventory_item, get_all_inventory,
-    set_menu_price, get_menu_list, get_all_categories, delete_menu_item,
-    add_sale_log, get_all_sales, get_sales_by_category,
-    add_transaction, get_all_transactions, delete_transaction, get_monthly_expense_by_category,
+    init_db, add_or_update_item, delete_inventory_item, get_all_inventory, delete_all_inventory,
+    set_menu_price, get_menu_list, get_all_categories, delete_menu_item, delete_all_menu_items,
+    add_sale_log, get_all_sales, get_sales_by_category, delete_all_sales,
+    add_transaction, get_all_transactions, delete_transaction, get_monthly_expense_by_category, delete_all_transactions,
     create_order, get_active_orders, get_order_items, get_active_order_items_by_table, update_order_status,
     create_staff_call, get_pending_staff_calls, acknowledge_staff_call
 )
@@ -54,6 +54,19 @@ VIP_MODE_OPTIONS = {
 # limit ของย่าง+ของทอด ในโซนบุฟเฟ่ Izakaya (รวมกันไม่เกิน 5 ไม้ต่อการสั่ง 1 รอบ แต่สั่งได้หลายรอบ)
 SKEWER_FRIED_ORDER_LIMIT = 5
 SKEWER_FRIED_CATEGORIES = {"บุฟเฟ่ / Buffet - ปิ้งย่างเสีบไม้", "บุฟเฟ่ / Buffet - ของทอด"}
+
+
+def render_delete_all_button(label, confirm_key, button_key, delete_fn, success_message="ลบข้อมูลทั้งหมดเรียบร้อยแล้วครับ"):
+    """
+    ปุ่ม "ลบทั้งหมดทีเดียว" ใช้ซ้ำได้หลายหน้า — ต้องติ๊กยืนยันก่อนถึงจะกดปุ่มลบได้ กันกดพลาด (การลบถาวร กู้คืนไม่ได้)
+    """
+    with st.expander(f"🗑️ {label} (ลบถาวร กู้คืนไม่ได้)"):
+        st.warning(f"⚠️ การกดปุ่มนี้จะ{label}ทั้งหมดในระบบทันที ไม่สามารถกู้คืนได้ กรุณาตรวจสอบให้แน่ใจก่อนกด")
+        confirmed = st.checkbox("ฉันเข้าใจและยืนยันว่าต้องการลบข้อมูลทั้งหมด", key=confirm_key)
+        if st.button(f"🗑️ {label}เดี๋ยวนี้", key=button_key, disabled=not confirmed, type="primary"):
+            delete_fn()
+            st.success(success_message)
+            st.rerun()
 
 
 def _zone_list(zones_value):
@@ -361,43 +374,74 @@ if query_params.get("page") == "order":
         ]
 
         table_no = st.text_input("หมายเลขโต๊ะ", value=prefill_table)
-        st.write("เลือกเมนูที่ต้องการสั่ง:")
 
-        qty_inputs = {}
-        # แบ่งเมนูเป็นหมวดหมู่ ให้ลูกค้าหาง่ายขึ้น
-        for category_name, group_df in display_menu_df.groupby("category"):
-            st.markdown(f"**🍽️ {category_name}**")
+        # ---------------- ตัวช่วยแสดงชื่อหมวดหมู่แบบสั้น + ไอคอน ให้ปุ่มดูเป็นมิตรกับลูกค้า ----------------
+        _CATEGORY_PREFIXES = [
+            "อาลาคาร์ท / A La Carte - ", "อาลาคาร์ท / A La Carte -", "อาลาคาร์ท / A La Carte-",
+            "บุฟเฟ่ / Buffet - ", "บุฟเฟ่ / Buffet -", "บุฟเฟ่ / Buffet-",
+            "เครื่องดื่ม - ", "เครื่องดื่ม -", "เครื่องดื่ม-",
+        ]
 
+        def _pretty_category(cat):
+            result = str(cat).strip()
+            for p in _CATEGORY_PREFIXES:
+                if result.startswith(p):
+                    result = result[len(p):].strip()
+                    break
+            return result or str(cat)
+
+        _CATEGORY_ICONS = [
+            (["ซูชิ", "ซาซิมิ", "sushi", "sashimi"], "🍣"),
+            (["ราเมง", "ราเมน", "ramen"], "🍜"),
+            (["ย่าง", "เสียบไม้", "yaki"], "🍢"),
+            (["ทอด", "คุชิ", "fried"], "🍤"),
+            (["ซุป", "soup"], "🍲"),
+            (["นาเบะ", "nabe", "ชาบู"], "🍲"),
+            (["เบียร์", "beer"], "🍺"),
+            (["ไวน์", "wine"], "🍷"),
+            (["สาเก", "sake"], "🍶"),
+            (["โซจู", "soju"], "🥃"),
+            (["ค็อกเทล", "cocktail"], "🍹"),
+            (["เครื่องดื่ม", "mixer", "drink"], "🥤"),
+            (["บุฟเฟ่", "buffet"], "🍽️"),
+        ]
+
+        def _category_icon(cat):
+            low = str(cat).lower()
+            for keywords, icon in _CATEGORY_ICONS:
+                if any(k.lower() in low for k in keywords):
+                    return icon
+            return "🍴"
+
+        def _render_item_row(row, category_name):
+            col_img, col_info = st.columns([1, 3])
+            with col_img:
+                if "image" in row and row["image"] is not None:
+                    st.image(row["image"], width=110)
+                else:
+                    st.markdown(
+                        "<div style='font-size:44px; text-align:center'>🍽️</div>",
+                        unsafe_allow_html=True,
+                    )
+            with col_info:
+                item_label = row["menu_name"]
+                if row.get("is_recommended"):
+                    item_label = f"⭐ แนะนำ | {item_label}"
+                st.number_input(
+                    f"{item_label} ({row['price']:,.0f} บาท)",
+                    min_value=0, step=1, key=f"cust_qty_{row['menu_name']}"
+                )
+                if pd.notna(row.get("description")) and str(row.get("description")).strip():
+                    st.caption(row["description"])
+
+        def _render_category_items(category_name, group_df):
             has_size_group = group_df["size_group"].fillna("").str.strip() != ""
             standalone_items = group_df[~has_size_group]
             sized_items = group_df[has_size_group]
 
-            def _render_item_row(row):
-                col_img, col_info = st.columns([1, 3])
-                with col_img:
-                    if "image" in row and row["image"] is not None:
-                        st.image(row["image"], width=110)
-                    else:
-                        st.markdown(
-                            "<div style='font-size:44px; text-align:center'>🍽️</div>",
-                            unsafe_allow_html=True,
-                        )
-                with col_info:
-                    item_label = row["menu_name"]
-                    if row.get("is_recommended"):
-                        item_label = f"⭐ แนะนำ | {item_label}"
-                    qty_inputs[row["menu_name"]] = st.number_input(
-                        f"{item_label} ({row['price']:,.0f} บาท)",
-                        min_value=0, step=1, key=f"cust_qty_{row['menu_name']}"
-                    )
-                    if pd.notna(row.get("description")) and str(row.get("description")).strip():
-                        st.caption(row["description"])
-
-            # เมนูปกติ ไม่มีหลายไซส์ — แสดงแบบเดิมทุกอย่าง
             for _, row in standalone_items.iterrows():
-                _render_item_row(row)
+                _render_item_row(row, category_name)
 
-            # เมนูที่มีหลายไซส์ (size_group เดียวกัน) — รวมเป็นแถวเดียว ให้เลือกไซส์ก่อนแล้วค่อยใส่จำนวน
             for size_group_name, variants_df in sized_items.groupby("size_group"):
                 col_img, col_info = st.columns([1, 3])
                 first_row = variants_df.iloc[0]
@@ -422,7 +466,7 @@ if query_params.get("page") == "order":
                     selected_row = variants_df[
                         variants_df["size_label"].fillna(variants_df["menu_name"]) == selected_size
                     ].iloc[0]
-                    qty_inputs[selected_row["menu_name"]] = st.number_input(
+                    st.number_input(
                         f"{selected_size} ({selected_row['price']:,.0f} บาท)",
                         min_value=0, step=1,
                         key=f"cust_qty_sized_{category_name}_{size_group_name}",
@@ -430,17 +474,70 @@ if query_params.get("page") == "order":
                     if pd.notna(selected_row.get("description")) and str(selected_row.get("description")).strip():
                         st.caption(selected_row["description"])
 
-        submitted_order = st.button("🛒 สั่งอาหาร")
+        def _collect_cart_items():
+            """อ่านจำนวนที่ลูกค้าเลือกไว้จากทุกหมวดหมู่ในโซนนี้ (ไม่ใช่แค่หมวดที่กำลังเปิดดูอยู่) — ตะกร้าไม่หายตอนสลับหมวด"""
+            collected = []
+            for cat_name, grp_df in display_menu_df.groupby("category"):
+                has_sg = grp_df["size_group"].fillna("").str.strip() != ""
+                for _, r in grp_df[~has_sg].iterrows():
+                    q = st.session_state.get(f"cust_qty_{r['menu_name']}", 0)
+                    if q and q > 0:
+                        collected.append((r["menu_name"], q, float(r["price"]), cat_name))
+                for sg_name, variants_df in grp_df[has_sg].groupby("size_group"):
+                    chosen = st.session_state.get(f"size_choice_{cat_name}_{sg_name}")
+                    if chosen is None:
+                        continue
+                    matched = variants_df[variants_df["size_label"].fillna(variants_df["menu_name"]) == chosen]
+                    if matched.empty:
+                        continue
+                    sel_row = matched.iloc[0]
+                    q = st.session_state.get(f"cust_qty_sized_{cat_name}_{sg_name}", 0)
+                    if q and q > 0:
+                        collected.append((sel_row["menu_name"], q, float(sel_row["price"]), cat_name))
+            return collected
+
+        # ---------------- หน้าเลือกหมวดหมู่ / รายการเมนูในหมวดที่เลือก ----------------
+        categories = sorted(display_menu_df["category"].dropna().unique().tolist())
+        category_labels = {c: f"{_category_icon(c)} {_pretty_category(c)}" for c in categories}
+        cat_state_key = f"order_cat::{effective_zone}"
+        selected_category = st.session_state.get(cat_state_key)
+        if selected_category not in categories:
+            selected_category = None
+
+        cart_preview = _collect_cart_items()
+        if cart_preview:
+            cart_total = sum(q * p for _, q, p, _ in cart_preview)
+            st.info(f"🛒 ตอนนี้เลือกไว้ {len(cart_preview)} รายการ รวม {cart_total:,.0f} บาท (เลื่อนดูหมวดอื่นต่อได้ ของที่เลือกไว้จะไม่หาย)")
+
+        if selected_category is None and len(categories) == 1:
+            selected_category = categories[0]  # หมวดเดียวในโซนนี้ ไม่ต้องให้กดเลือกซ้ำ เข้าเมนูตรงๆ เลย
+
+        if selected_category is None:
+            st.write("เลือกหมวดหมู่ที่ต้องการสั่ง:")
+            cols = st.columns(2)
+            for i, cat in enumerate(categories):
+                with cols[i % 2]:
+                    if st.button(category_labels[cat], key=f"catbtn_{effective_zone}_{cat}", use_container_width=True):
+                        st.session_state[cat_state_key] = cat
+                        st.rerun()
+        else:
+            if len(categories) > 1 and st.button("◀ กลับไปเลือกหมวดหมู่", key=f"back_{effective_zone}"):
+                st.session_state[cat_state_key] = None
+                st.rerun()
+            st.markdown(f"### {category_labels[selected_category]}")
+            _render_category_items(
+                selected_category, display_menu_df[display_menu_df["category"] == selected_category]
+            )
+
+        st.divider()
+        submitted_order = st.button("🛒 สั่งอาหาร", type="primary", use_container_width=True)
 
         if submitted_order:
-            items = [
-                (name, qty, float(menu_df[menu_df["menu_name"] == name]["price"].iloc[0]))
-                for name, qty in qty_inputs.items() if qty > 0
-            ]
+            cart_items = _collect_cart_items()
+            items = [(name, qty, price) for name, qty, price, _cat in cart_items]
             # limit ของย่าง+ของทอด รวมกันไม่เกิน 5 ไม้ต่อการสั่ง 1 รอบ (เฉพาะโซนบุฟเฟ่ Izakaya) — สั่งรอบใหม่ได้เรื่อยๆ แค่ไม่เกิน 5 ต่อรอบ
             skewer_fried_qty = sum(
-                qty for name, qty, _ in items
-                if menu_df[menu_df["menu_name"] == name]["category"].iloc[0] in SKEWER_FRIED_CATEGORIES
+                qty for _name, qty, _price, cat in cart_items if cat in SKEWER_FRIED_CATEGORIES
             )
             if not table_no:
                 st.error("กรุณากรอกหมายเลขโต๊ะ")
@@ -638,6 +735,11 @@ elif page == "📦 สต็อกวัตถุดิบ":
             delete_inventory_item(selected_item_to_delete)
             st.success(f"ลบวัตถุดิบ '{selected_item_to_delete}' เรียบร้อยแล้ว! ✅")
             st.rerun()
+
+        render_delete_all_button(
+            "ลบวัตถุดิบทั้งหมด", "confirm_delete_all_inventory", "btn_delete_all_inventory",
+            delete_all_inventory,
+        )
 
 # ================= หน้า: เมนูอาหาร =================
 elif page == "🍽️ เมนูอาหาร":
@@ -940,6 +1042,12 @@ elif page == "🍽️ เมนูอาหาร":
             st.success(f"ลบเมนู '{selected_menu_to_delete}' เรียบร้อยแล้ว! ✅")
             st.rerun()
 
+        render_delete_all_button(
+            "ลบเมนูทั้งหมด", "confirm_delete_all_menu", "btn_delete_all_menu",
+            delete_all_menu_items,
+            success_message="ลบเมนูทั้งหมดเรียบร้อยแล้วครับ — ตอนนี้พร้อมนำเข้าไฟล์ CSV ชุดใหม่ได้เลย",
+        )
+
 # ================= หน้า: รายงานยอดขาย =================
 elif page == "📊 รายงานยอดขาย":
     st.header("📊 รายงานยอดขาย")
@@ -1014,6 +1122,13 @@ elif page == "📊 รายงานยอดขาย":
             trend = cat_df.pivot_table(index="month", columns="category", values="revenue", aggfunc="sum").fillna(0)
             st.line_chart(trend)
 
+    st.divider()
+    render_delete_all_button(
+        "ลบประวัติยอดขายทั้งหมด", "confirm_delete_all_sales", "btn_delete_all_sales",
+        delete_all_sales,
+        success_message="ลบประวัติยอดขายทั้งหมดเรียบร้อยแล้วครับ",
+    )
+
 # ================= หน้า: การเงิน (เฉพาะ Manager) =================
 elif page == "💰 การเงิน":
     st.header("💰 การเงิน (รายจ่ายร้าน)")
@@ -1086,6 +1201,13 @@ elif page == "💰 การเงิน":
             delete_transaction(del_id)
             st.success("ลบรายการเรียบร้อยแล้ว! ✅")
             st.rerun()
+
+    st.divider()
+    render_delete_all_button(
+        "ลบรายการการเงินทั้งหมด", "confirm_delete_all_trans", "btn_delete_all_trans",
+        delete_all_transactions,
+        success_message="ลบรายการการเงินทั้งหมดเรียบร้อยแล้วครับ",
+    )
 
 # ================= หน้า: ครัว (ออเดอร์จาก QR) =================
 elif page == "👨‍🍳 ครัว (ออเดอร์)":
@@ -1218,6 +1340,7 @@ elif page == "📱 QR สั่งอาหาร":
                 order_url += f"&zone={urllib.parse.quote(zone_choice_key)}"
             if brand_choice != "default":
                 order_url += f"&brand={brand_choice}"
+            order_url += "&embed=true"  # ซ่อนแถบ Fork/GitHub/เมนูของ Streamlit Cloud ไม่ให้ลูกค้าเห็น
             qr_img = qrcode.make(order_url)
             buf = io.BytesIO()
             qr_img.save(buf, format="PNG")
@@ -1267,6 +1390,7 @@ elif page == "📱 QR สั่งอาหาร":
                     order_url += f"&zone={urllib.parse.quote(batch_zone_choice_key)}"
                 if batch_brand_choice != "default":
                     order_url += f"&brand={batch_brand_choice}"
+                order_url += "&embed=true"  # ซ่อนแถบ Fork/GitHub/เมนูของ Streamlit Cloud ไม่ให้ลูกค้าเห็น
                 qr_img = qrcode.make(order_url)
                 buf = io.BytesIO()
                 qr_img.save(buf, format="PNG")
