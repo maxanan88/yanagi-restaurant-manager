@@ -67,7 +67,8 @@ def init_db():
             size_label TEXT,
             time_from TEXT,
             time_to TEXT,
-            days_available TEXT
+            days_available TEXT,
+            zones TEXT
         )
     """)
 
@@ -91,6 +92,10 @@ def init_db():
         conn.execute("ALTER TABLE menu_prices ADD COLUMN time_to TEXT")
     if "days_available" not in existing_columns:
         conn.execute("ALTER TABLE menu_prices ADD COLUMN days_available TEXT")
+    if "zones" not in existing_columns:
+        # zones: รายชื่อโซนที่เมนูนี้ขายได้ คั่นด้วยจุลภาค เช่น "ramen,buffet_izakaya"
+        # ใส่ "all" ได้ถ้าอยากให้โชว์ทุกโซนอัตโนมัติ (ใช้กับเครื่องดื่มทั่วไป)
+        conn.execute("ALTER TABLE menu_prices ADD COLUMN zones TEXT")
 
     # ตารางบันทึกการขายแยกรายเมนู
     conn.execute("""
@@ -254,7 +259,7 @@ def delete_recipe_item(recipe_id):
 
 # ---------------- Menu price + selling ----------------
 
-def set_menu_price(menu_name, price, category="อื่นๆ", image_bytes=None, description=None, is_recommended=False, size_group=None, size_label=None, time_from=None, time_to=None, days_available=None):
+def set_menu_price(menu_name, price, category="อื่นๆ", image_bytes=None, description=None, is_recommended=False, size_group=None, size_label=None, time_from=None, time_to=None, days_available=None, zones=None):
     """
     image_bytes: ถ้าไม่ส่งมา (None) จะไม่ไปทับรูปเดิมที่เคยอัปโหลดไว้
     description: คำอธิบายเพิ่มเติม เช่น รายละเอียดส่วนประกอบในเซต (ไม่บังคับ)
@@ -265,11 +270,14 @@ def set_menu_price(menu_name, price, category="อื่นๆ", image_bytes=Non
     days_available: "ทุกวัน" / "วันธรรมดา" / "เสาร์-อาทิตย์" (ไม่ใส่ = ทุกวัน) เอาไว้คู่กับ time_from/time_to
         ใช้กับราคาที่เปลี่ยนตามวัน/เวลา เช่น บุฟเฟ่วันธรรมดาเปิด 14:00 vs เสาร์-อาทิตย์เปิด 12:00
         ระบบเช็คจากวันเวลาจริงอัตโนมัติ ลูกค้าเลือกเองไม่ได้
+    zones: string คั่นด้วยจุลภาค ของ zone key ที่เมนูนี้ขายได้ เช่น "ramen,buffet_izakaya"
+        ค่าที่ใช้ได้: ramen / buffet_izakaya / vip_nabe_buffet / vip_nabe_alacarte / all (all = โชว์ทุกโซน)
+        ถ้าไม่ใส่ (None) = โชว์ทุกโซนเหมือนกัน (เผื่อเมนูเก่าที่ยังไม่ได้ตั้งโซน จะได้ไม่หายไปจากระบบ)
     """
     conn = get_connection()
     conn.execute("""
-        INSERT INTO menu_prices (menu_name, price, category, image, description, is_recommended, size_group, size_label, time_from, time_to, days_available)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO menu_prices (menu_name, price, category, image, description, is_recommended, size_group, size_label, time_from, time_to, days_available, zones)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(menu_name) DO UPDATE SET
             price = excluded.price,
             category = excluded.category,
@@ -280,8 +288,9 @@ def set_menu_price(menu_name, price, category="อื่นๆ", image_bytes=Non
             size_label = excluded.size_label,
             time_from = excluded.time_from,
             time_to = excluded.time_to,
-            days_available = excluded.days_available
-    """, (menu_name, price, category, image_bytes, description, 1 if is_recommended else 0, size_group, size_label, time_from, time_to, days_available))
+            days_available = excluded.days_available,
+            zones = excluded.zones
+    """, (menu_name, price, category, image_bytes, description, 1 if is_recommended else 0, size_group, size_label, time_from, time_to, days_available, zones))
     conn.commit()
     conn.close()
 
@@ -365,10 +374,10 @@ def get_menu_list():
     """เอาไว้แสดงเมนู+ราคา+รูป+คำอธิบาย+แนะนำ+กลุ่มไซส์+ช่วงเวลา ให้ลูกค้าดูตอนสั่งอาหารผ่าน QR"""
     conn = get_connection()
     rows = conn.execute(
-        "SELECT menu_name, price, category, image, description, is_recommended, size_group, size_label, time_from, time_to, days_available FROM menu_prices ORDER BY menu_name"
+        "SELECT menu_name, price, category, image, description, is_recommended, size_group, size_label, time_from, time_to, days_available, zones FROM menu_prices ORDER BY menu_name"
     ).fetchall()
     conn.close()
-    return pd.DataFrame(rows, columns=["menu_name", "price", "category", "image", "description", "is_recommended", "size_group", "size_label", "time_from", "time_to", "days_available"])
+    return pd.DataFrame(rows, columns=["menu_name", "price", "category", "image", "description", "is_recommended", "size_group", "size_label", "time_from", "time_to", "days_available", "zones"])
 
 
 # ---------------- Orders (สั่งอาหารผ่าน QR) ----------------
