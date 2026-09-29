@@ -4,3 +4,4 @@ qrcode[pil]
 pillow
 openpyxl
 libsql
+tzdata
