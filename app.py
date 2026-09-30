@@ -376,6 +376,13 @@ if query_params.get("page") == "order":
         table_no = st.text_input("หมายเลขโต๊ะ", value=prefill_table)
 
         # ---------------- ตัวช่วยแสดงชื่อหมวดหมู่แบบสั้น + ไอคอน ให้ปุ่มดูเป็นมิตรกับลูกค้า ----------------
+        import unicodedata as _unicodedata
+
+        def _norm_text(s):
+            # กัน bug ที่ข้อความไทยเหมือนกันเป๊ะตาเห็น แต่ Unicode composition ต่างกัน (เช่น พิมพ์ผ่านมือถือ/คัดลอกมาคนละที่)
+            # ทำให้ค้นหาคำเทียบไม่เจอ ทั้งที่จริงคือคำเดียวกัน
+            return _unicodedata.normalize("NFC", str(s)).lower()
+
         _CATEGORY_PREFIXES = [
             "อาลาคาร์ท / A La Carte - ", "อาลาคาร์ท / A La Carte -", "อาลาคาร์ท / A La Carte-",
             "บุฟเฟ่ / Buffet - ", "บุฟเฟ่ / Buffet -", "บุฟเฟ่ / Buffet-",
@@ -407,11 +414,12 @@ if query_params.get("page") == "order":
         ]
 
         def _category_icon(cat):
-            low = str(cat).lower()
+            low = _norm_text(cat)
             for keywords, icon in _CATEGORY_ICONS:
-                if any(k.lower() in low for k in keywords):
+                if any(_norm_text(k) in low for k in keywords):
                     return icon
             return "🍴"
+
 
         def _render_item_row(row, category_name):
             col_img, col_info = st.columns([1, 3])
@@ -502,7 +510,7 @@ if query_params.get("page") == "order":
         import re as _re
 
         def _is_package_item(name):
-            return str(name).strip().startswith("บุฟเฟ่")
+            return _unicodedata.normalize("NFC", str(name)).strip().startswith("บุฟเฟ่")
 
         def _clean_package_label(name):
             # ตัดวงเล็บที่มีคำว่า "ก่อน"/"หลัง" หรือรูปแบบเวลา (เช่น 18:00) ออก เหลือแต่ชื่อที่ลูกค้าอ่านแล้วเข้าใจง่าย
@@ -527,8 +535,8 @@ if query_params.get("page") == "order":
         # บุฟเฟ่เบียร์ → ราเมง → ท็อปปิ้งราเมง → อาลาคาร์ทที่เหลือ → Izakaya → ปิ้งย่างเสียบไม้(บุฟเฟ่) → ของทอด(บุฟเฟ่) → เครื่องดื่มทุกชนิด (ท้ายสุดเสมอ)
         _CATEGORY_ORDER = [
             (1, ["บุฟเฟ่เบียร์", "beer buffet"]),
-            (3, ["ท็อปปิ้งราเมง", "ท็อปปิ้ง"]),  # เช็คก่อน "ราเมง" ทั่วไป กันโดนจับคู่ผิดหมวด (ลำดับเช็คไม่ใช่ลำดับแสดงผล)
-            (2, ["ราเมง", "ramen"]),
+            (3, ["ท็อปปิ้งราเมง", "ท็อปปิ้งราเมน", "ท็อปปิ้ง"]),  # เช็คก่อน "ราเมง" ทั่วไป กันโดนจับคู่ผิดหมวด (ลำดับเช็คไม่ใช่ลำดับแสดงผล)
+            (2, ["ราเมง", "ราเมน", "ramen"]),  # กันสะกดสองแบบ (ราเมง/ราเมน) ที่พบได้บ่อย
             (10, ["appetizer"]),
             (20, ["ซาซิมิ", "sashimi"]),
             (30, ["ซูชิเซต"]),
@@ -549,9 +557,9 @@ if query_params.get("page") == "order":
         ]
 
         def _category_sort_priority(cat):
-            low = str(cat).lower()
+            low = _norm_text(cat)
             for priority, keywords in _CATEGORY_ORDER:
-                if any(k.lower() in low for k in keywords):
+                if any(_norm_text(k) in low for k in keywords):
                     return priority
             return 500  # หมวดที่ไม่เข้าเงื่อนไขไหนเลย ให้อยู่หลังอาหารหลัก แต่ก่อนเครื่องดื่ม
 
