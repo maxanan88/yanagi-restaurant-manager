@@ -1,5 +1,6 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import unicodedata
 import streamlit as st
 import pandas as pd
 import libsql
@@ -300,6 +301,10 @@ def set_menu_price(menu_name, price, category="อื่นๆ", image_bytes=Non
         ถ้าไม่ใส่ (None) = โชว์ทุกโซนเหมือนกัน (เผื่อเมนูเก่าที่ยังไม่ได้ตั้งโซน จะได้ไม่หายไปจากระบบ)
     """
     conn = get_connection()
+    # กัน bug ข้อความไทยเหมือนกันเป๊ะตาเห็นแต่ Unicode composition ต่างกัน (พิมพ์จากมือถือ/คัดลอกจากคนละที่มา)
+    # ทำให้ระบบเทียบ/ค้นข้อความไม่เจอ ทั้งที่จริงคือคำเดียวกัน — ล็อกให้เป็นรูปแบบเดียวกันเสมอตอนบันทึก
+    menu_name = unicodedata.normalize("NFC", str(menu_name)) if menu_name else menu_name
+    category = unicodedata.normalize("NFC", str(category)) if category else category
     conn.execute("""
         INSERT INTO menu_prices (menu_name, price, category, image, description, is_recommended, size_group, size_label, time_from, time_to, days_available, zones)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
