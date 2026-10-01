@@ -571,10 +571,6 @@ if query_params.get("page") == "order":
         )
         category_labels = {c: f"{_category_icon(c)} {_pretty_category(c)}" for c in categories}
 
-        with st.expander("🔧 ดีบัก (ชั่วคราว — เอาไว้หาสาเหตุลำดับหมวดหมู่)"):
-            for c in categories:
-                st.code(f"priority={_category_sort_priority(c)}  |  repr={repr(c)}", language=None)
-
         cat_state_key = f"order_cat::{effective_zone}"
         selected_category = st.session_state.get(cat_state_key)
         if selected_category not in categories:
@@ -592,12 +588,11 @@ if query_params.get("page") == "order":
             pass  # โซนนี้มีแต่ราคาแพ็กเกจ ไม่มีอาหารให้เลือกเพิ่ม (แสดงแบนเนอร์ด้านบนไปแล้ว)
         elif selected_category is None:
             st.write("เลือกหมวดหมู่ที่ต้องการสั่ง:")
-            cols = st.columns(2)
-            for i, cat in enumerate(categories):
-                with cols[i % 2]:
-                    if st.button(category_labels[cat], key=f"catbtn_{effective_zone}_{cat}", use_container_width=True):
-                        st.session_state[cat_state_key] = cat
-                        st.rerun()
+            # ใช้ 1 คอลัมน์เรียงบนลงล่างตรงๆ (ไม่ใช้ 2 คอลัมน์ เพราะมือถือจอแคบจะโชว์คอลัมน์ซ้ายทั้งหมดก่อนแล้วค่อยขวา ทำให้ลำดับดูสลับมั่ว ทั้งที่จริงๆ เรียงถูกอยู่แล้ว)
+            for cat in categories:
+                if st.button(category_labels[cat], key=f"catbtn_{effective_zone}_{cat}", use_container_width=True):
+                    st.session_state[cat_state_key] = cat
+                    st.rerun()
         else:
             if len(categories) > 1 and st.button("◀ กลับไปเลือกหมวดหมู่", key=f"back_{effective_zone}"):
                 st.session_state[cat_state_key] = None
