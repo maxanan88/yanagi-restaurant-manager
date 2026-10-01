@@ -570,6 +570,11 @@ if query_params.get("page") == "order":
             key=lambda c: (_category_sort_priority(c), c),
         )
         category_labels = {c: f"{_category_icon(c)} {_pretty_category(c)}" for c in categories}
+
+        with st.expander("🔧 ดีบัก (ชั่วคราว — เอาไว้หาสาเหตุลำดับหมวดหมู่)"):
+            for c in categories:
+                st.code(f"priority={_category_sort_priority(c)}  |  repr={repr(c)}", language=None)
+
         cat_state_key = f"order_cat::{effective_zone}"
         selected_category = st.session_state.get(cat_state_key)
         if selected_category not in categories:
