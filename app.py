@@ -14,7 +14,9 @@ from database import (
     set_menu_price, get_menu_list, get_all_categories, delete_menu_item, delete_all_menu_items,
     add_sale_log, get_all_sales, get_sales_by_category, delete_all_sales,
     add_transaction, get_all_transactions, delete_transaction, get_monthly_expense_by_category, delete_all_transactions,
-    create_order, get_active_orders, get_order_items, get_active_order_items_by_table, update_order_status,
+    create_order, get_active_orders, get_active_drink_orders, get_active_table_numbers,
+    get_order_items, get_active_order_items_by_table,
+    update_order_status, update_drink_status,
     create_staff_call, get_pending_staff_calls, acknowledge_staff_call
 )
 
@@ -54,6 +56,18 @@ VIP_MODE_OPTIONS = {
 # limit ของย่าง+ของทอด ในโซนบุฟเฟ่ Izakaya (รวมกันไม่เกิน 5 ไม้ต่อการสั่ง 1 รอบ แต่สั่งได้หลายรอบ)
 SKEWER_FRIED_ORDER_LIMIT = 5
 SKEWER_FRIED_CATEGORIES = {"บุฟเฟ่ / Buffet - ปิ้งย่างเสีบไม้", "บุฟเฟ่ / Buffet - ของทอด"}
+
+# คำที่ใช้ตัดสินว่าหมวดหมู่นี้คือ "เครื่องดื่ม" — ใช้แยกออเดอร์ส่งไปแคชเชียร์ (เครื่องดื่ม) แทนครัว (อาหาร)
+DRINK_CATEGORY_KEYWORDS = [
+    "เบียร์", "beer", "ไวน์", "wine", "สาเก", "sake", "โซจู", "soju",
+    "ค็อกเทล", "cocktail", "spirit", "เครื่องดื่ม", "mixer", "drink",
+]
+
+
+def _is_drink_category(cat):
+    import unicodedata as _ud
+    low = _ud.normalize("NFC", str(cat)).lower()
+    return any(_ud.normalize("NFC", kw).lower() in low for kw in DRINK_CATEGORY_KEYWORDS)
 
 
 def render_delete_all_button(label, confirm_key, button_key, delete_fn, success_message="ลบข้อมูลทั้งหมดเรียบร้อยแล้วครับ"):
@@ -229,7 +243,7 @@ p, span, label, .stMarkdown, .stCaption {{
 
 # DB_SCHEMA_VERSION: เพิ่มเลขนี้ทุกครั้งที่แก้โครงสร้างตาราง (เพิ่ม/ลบคอลัมน์) ใน database.py
 # เพื่อบังคับให้เช็ค/อัปเดตโครงสร้างฐานข้อมูลใหม่ ป้องกันปัญหาแคชค้างจนคอลัมน์ใหม่ไม่ถูกสร้าง
-DB_SCHEMA_VERSION = "v2"
+DB_SCHEMA_VERSION = "v3"
 
 
 @st.cache_resource
@@ -241,14 +255,26 @@ def _init_db_once(_schema_version):
 _init_db_once(DB_SCHEMA_VERSION)
 
 
-def complete_order(order_id, table_no):
-    """ตอนกด 'เสร็จแล้ว' ในหน้าครัว: บันทึกลงรายงานยอดขายเท่านั้น (สต็อกจัดการแยกต่างหาก)"""
+def complete_food_order(order_id, table_no):
+    """ตอนครัวกด 'เสร็จแล้ว': บันทึกยอดขายเฉพาะรายการอาหาร (ไม่รวมเครื่องดื่ม ฝั่งแคชเชียร์จะบันทึกเองแยกต่างหาก)"""
     items_df = get_order_items(order_id)
+    food_items = items_df[~items_df["category"].apply(_is_drink_category)]
     sale_time = str(now_bangkok())
-    for _, item in items_df.iterrows():
+    for _, item in food_items.iterrows():
         line_total = item["qty"] * item["price"]
         add_sale_log(sale_time, item["menu_name"], int(item["qty"]), line_total)
     update_order_status(order_id, "เสร็จแล้ว")
+
+
+def complete_drink_order(order_id, table_no):
+    """ตอนแคชเชียร์กด 'เสร็จแล้ว': บันทึกยอดขายเฉพาะรายการเครื่องดื่ม"""
+    items_df = get_order_items(order_id)
+    drink_items = items_df[items_df["category"].apply(_is_drink_category)]
+    sale_time = str(now_bangkok())
+    for _, item in drink_items.iterrows():
+        line_total = item["qty"] * item["price"]
+        add_sale_log(sale_time, item["menu_name"], int(item["qty"]), line_total)
+    update_drink_status(order_id, "เสร็จแล้ว")
 
 
 def print_kitchen_ticket(order_row, items_df):
@@ -690,6 +716,7 @@ OWNER_PAGES = [
     "📊 รายงานยอดขาย",
     "💰 การเงิน",
     "👨‍🍳 ครัว (ออเดอร์)",
+    "🥤 แคชเชียร์ (เครื่องดื่ม)",
     "🧾 สรุปยอดต่อโต๊ะ",
     "📱 QR สั่งอาหาร",
 ]
@@ -697,6 +724,7 @@ STAFF_PAGES = [
     "👨‍🍳 ครัว (ออเดอร์)",
 ]
 CASHIER_PAGES = [
+    "🥤 แคชเชียร์ (เครื่องดื่ม)",
     "🧾 สรุปยอดต่อโต๊ะ",
 ]
 
@@ -1282,9 +1310,10 @@ elif page == "💰 การเงิน":
         success_message="ลบรายการการเงินทั้งหมดเรียบร้อยแล้วครับ",
     )
 
-# ================= หน้า: ครัว (ออเดอร์จาก QR) =================
+# ================= หน้า: ครัว (ออเดอร์จาก QR) — เฉพาะรายการอาหาร ไม่รวมเครื่องดื่ม =================
 elif page == "👨‍🍳 ครัว (ออเดอร์)":
-    st.header("👨‍🍳 ออเดอร์จากลูกค้า")
+    st.header("👨‍🍳 ออเดอร์อาหารจากลูกค้า")
+    st.caption("หน้านี้โชว์เฉพาะรายการอาหาร — เครื่องดื่มจะไปแจ้งเตือนฝั่งแคชเชียร์แยกต่างหาก")
 
     if st.button("🔄 รีเฟรชออเดอร์ใหม่"):
         st.rerun()
@@ -1294,12 +1323,17 @@ elif page == "👨‍🍳 ครัว (ออเดอร์)":
     if active_orders.empty:
         st.info("ยังไม่มีออเดอร์ใหม่ตอนนี้")
     else:
+        shown_any = False
         for _, order in active_orders.iterrows():
             items_df = get_order_items(order["id"])
+            food_items = items_df[~items_df["category"].apply(_is_drink_category)]
+            if food_items.empty:
+                continue  # ออเดอร์นี้มีแต่เครื่องดื่ม ไม่ต้องโชว์ในครัว
+            shown_any = True
             with st.container(border=True):
                 st.subheader(f"โต๊ะ {order['table_no']} — ออเดอร์ #{order['id']} ({order['status']})")
                 st.caption(order["created_at"])
-                st.dataframe(items_df[["menu_name", "qty", "price"]], use_container_width=True)
+                st.dataframe(food_items[["menu_name", "qty", "price"]], use_container_width=True)
 
                 col1, col2, col3 = st.columns(3)
                 with col1:
@@ -1309,16 +1343,57 @@ elif page == "👨‍🍳 ครัว (ออเดอร์)":
                             st.rerun()
                 with col2:
                     if st.button("✅ เสร็จแล้ว (บันทึกยอดขาย)", key=f"done_{order['id']}"):
-                        complete_order(order["id"], order["table_no"])
-                        st.success(f"ปิดออเดอร์โต๊ะ {order['table_no']} เรียบร้อย! ✅")
+                        complete_food_order(order["id"], order["table_no"])
+                        st.success(f"ปิดออเดอร์อาหารโต๊ะ {order['table_no']} เรียบร้อย! ✅")
                         st.rerun()
                 with col3:
                     if st.button("🖨️ พิมพ์ใบสั่ง", key=f"print_{order['id']}"):
                         st.session_state[f"show_print_{order['id']}"] = True
 
                 if st.session_state.get(f"show_print_{order['id']}"):
-                    print_kitchen_ticket(order, items_df)
+                    print_kitchen_ticket(order, food_items)
                     st.session_state[f"show_print_{order['id']}"] = False
+        if not shown_any:
+            st.info("ยังไม่มีออเดอร์อาหารใหม่ตอนนี้")
+
+# ================= หน้า: แคชเชียร์ (ออเดอร์เครื่องดื่มจาก QR) =================
+elif page == "🥤 แคชเชียร์ (เครื่องดื่ม)":
+    st.header("🥤 ออเดอร์เครื่องดื่มจากลูกค้า")
+    st.caption("หน้านี้โชว์เฉพาะรายการเครื่องดื่ม — อาหารไปอยู่ฝั่งครัวแยกต่างหาก")
+
+    if st.button("🔄 รีเฟรชออเดอร์ใหม่", key="refresh_drinks"):
+        st.rerun()
+
+    active_drink_orders = get_active_drink_orders()
+
+    if active_drink_orders.empty:
+        st.info("ยังไม่มีออเดอร์เครื่องดื่มใหม่ตอนนี้")
+    else:
+        shown_any = False
+        for _, order in active_drink_orders.iterrows():
+            items_df = get_order_items(order["id"])
+            drink_items = items_df[items_df["category"].apply(_is_drink_category)]
+            if drink_items.empty:
+                continue  # ออเดอร์นี้มีแต่อาหาร ไม่ต้องโชว์ฝั่งแคชเชียร์
+            shown_any = True
+            with st.container(border=True):
+                st.subheader(f"โต๊ะ {order['table_no']} — ออเดอร์ #{order['id']} ({order['drink_status']})")
+                st.caption(order["created_at"])
+                st.dataframe(drink_items[["menu_name", "qty", "price"]], use_container_width=True)
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    if order["drink_status"] == "รอทำ":
+                        if st.button("🥤 เริ่มทำ", key=f"drink_start_{order['id']}"):
+                            update_drink_status(order["id"], "กำลังทำ")
+                            st.rerun()
+                with col2:
+                    if st.button("✅ เสร็จแล้ว (บันทึกยอดขาย)", key=f"drink_done_{order['id']}"):
+                        complete_drink_order(order["id"], order["table_no"])
+                        st.success(f"ส่งเครื่องดื่มโต๊ะ {order['table_no']} เรียบร้อย! ✅")
+                        st.rerun()
+        if not shown_any:
+            st.info("ยังไม่มีออเดอร์เครื่องดื่มใหม่ตอนนี้")
 
 # ================= หน้า: สรุปยอดต่อโต๊ะ (สำหรับแคชเชียร์) =================
 elif page == "🧾 สรุปยอดต่อโต๊ะ":
@@ -1354,12 +1429,12 @@ elif page == "🧾 สรุปยอดต่อโต๊ะ":
     if st.button("🔄 รีเฟรช"):
         st.rerun()
 
-    active_orders = get_active_orders()
+    active_table_numbers = get_active_table_numbers()
 
-    if active_orders.empty:
+    if not active_table_numbers:
         st.info("ยังไม่มีโต๊ะที่มีออเดอร์ค้างอยู่ตอนนี้")
     else:
-        table_numbers = sorted(active_orders["table_no"].unique(), key=str)
+        table_numbers = sorted(active_table_numbers, key=str)
         for t_no in table_numbers:
             table_items_df = get_active_order_items_by_table(t_no)
             if table_items_df.empty:
