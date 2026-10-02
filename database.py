@@ -119,14 +119,19 @@ def init_db():
     """)
 
     # ตารางออเดอร์จากลูกค้า (สแกน QR สั่งอาหาร)
+    # status = สถานะฝั่งครัว (อาหาร), drink_status = สถานะฝั่งแคชเชียร์ (เครื่องดื่ม) แยกกันคนละคิว
     conn.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             table_no TEXT NOT NULL,
             created_at TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'รอทำ'
+            status TEXT NOT NULL DEFAULT 'รอทำ',
+            drink_status TEXT NOT NULL DEFAULT 'รอทำ'
         )
     """)
+    orders_columns = [row[1] for row in conn.execute("PRAGMA table_info(orders)").fetchall()]
+    if "drink_status" not in orders_columns:
+        conn.execute("ALTER TABLE orders ADD COLUMN drink_status TEXT NOT NULL DEFAULT 'รอทำ'")
 
     # ตารางรายการอาหารในแต่ละออเดอร์
     conn.execute("""
@@ -448,6 +453,7 @@ def create_order(table_no, items):
 
 
 def get_active_orders():
+    """ออเดอร์ที่ฝั่งครัว (อาหาร) ยังไม่เสร็จ — ใช้กับหน้า ครัว (ออเดอร์)"""
     conn = get_connection()
     rows = conn.execute(
         "SELECT id, table_no, created_at, status FROM orders WHERE status != 'เสร็จแล้ว' ORDER BY created_at ASC"
@@ -456,13 +462,47 @@ def get_active_orders():
     return pd.DataFrame(rows, columns=["id", "table_no", "created_at", "status"])
 
 
-def get_order_items(order_id):
+def get_active_table_numbers():
+    """โต๊ะที่ยังมีออเดอร์ค้างอยู่ (อาหารหรือเครื่องดื่มอย่างใดอย่างหนึ่งยังไม่เสร็จ) — ใช้กับหน้าสรุปยอดต่อโต๊ะ"""
     conn = get_connection()
     rows = conn.execute(
-        "SELECT id, order_id, menu_name, qty, price FROM order_items WHERE order_id = ?", (order_id,)
+        "SELECT DISTINCT table_no FROM orders WHERE status != 'เสร็จแล้ว' OR drink_status != 'เสร็จแล้ว'"
     ).fetchall()
     conn.close()
-    return pd.DataFrame(rows, columns=["id", "order_id", "menu_name", "qty", "price"])
+    return [r[0] for r in rows]
+
+
+def get_active_drink_orders():
+    """ออเดอร์ที่ฝั่งแคชเชียร์ (เครื่องดื่ม) ยังไม่เสร็จ — ใช้กับหน้า แคชเชียร์ (เครื่องดื่ม)"""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT id, table_no, created_at, drink_status FROM orders WHERE drink_status != 'เสร็จแล้ว' ORDER BY created_at ASC"
+    ).fetchall()
+    conn.close()
+    return pd.DataFrame(rows, columns=["id", "table_no", "created_at", "drink_status"])
+
+
+def get_order_items(order_id):
+    """คืนรายการสินค้าของออเดอร์ พร้อมหมวดหมู่ (join กับ menu_prices) เอาไว้แยกอาหาร/เครื่องดื่ม"""
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT oi.id, oi.order_id, oi.menu_name, oi.qty, oi.price, mp.category
+        FROM order_items oi
+        LEFT JOIN menu_prices mp ON oi.menu_name = mp.menu_name
+        WHERE oi.order_id = ?
+        """,
+        (order_id,)
+    ).fetchall()
+    conn.close()
+    return pd.DataFrame(rows, columns=["id", "order_id", "menu_name", "qty", "price", "category"])
+
+
+def update_drink_status(order_id, status):
+    conn = get_connection()
+    conn.execute("UPDATE orders SET drink_status = ? WHERE id = ?", (status, order_id))
+    conn.commit()
+    conn.close()
 
 
 def get_active_order_items_by_table(table_no):
@@ -473,7 +513,7 @@ def get_active_order_items_by_table(table_no):
         SELECT oi.menu_name, oi.qty, oi.price
         FROM order_items oi
         JOIN orders o ON oi.order_id = o.id
-        WHERE o.table_no = ? AND o.status != 'เสร็จแล้ว'
+        WHERE o.table_no = ? AND (o.status != 'เสร็จแล้ว' OR o.drink_status != 'เสร็จแล้ว')
         """,
         (table_no,)
     ).fetchall()
