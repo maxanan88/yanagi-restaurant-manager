@@ -16,7 +16,7 @@ from database import (
     add_transaction, get_all_transactions, delete_transaction, get_monthly_expense_by_category, delete_all_transactions,
     create_order, get_active_orders, get_active_drink_orders, get_active_table_numbers,
     get_order_items, get_active_order_items_by_table,
-    update_order_status, update_drink_status,
+    update_order_status, update_drink_status, delete_order, delete_all_orders, delete_orders_by_table,
     create_staff_call, get_pending_staff_calls, acknowledge_staff_call
 )
 
@@ -342,6 +342,11 @@ if query_params.get("page") == "order":
 
     st.caption("ราคาทั้งหมดยังไม่รวม Service Charge 10% และ VAT 7% (All prices are subject to 10% service charge and 7% VAT)")
 
+    # โชว์ข้อความสั่งสำเร็จค้างไว้ข้ามรอบ rerun (ต้อง rerun เพื่อให้ตะกร้าเคลียร์จริงๆ ในหน้าจอ)
+    if st.session_state.get("order_just_placed_total") is not None:
+        st.success(f"สั่งอาหารเรียบร้อย! รวม {st.session_state['order_just_placed_total']:,.0f} บาท ทางร้านกำลังเตรียมให้ครับ 🙏")
+        st.session_state["order_just_placed_total"] = None
+
     menu_df = get_menu_list()
 
     if menu_df.empty:
@@ -451,7 +456,7 @@ if query_params.get("page") == "order":
             col_img, col_info = st.columns([1, 3])
             with col_img:
                 if "image" in row and row["image"] is not None:
-                    st.image(row["image"], width=110)
+                    st.image(row["image"], width=170)
                 else:
                     st.markdown(
                         "<div style='font-size:44px; text-align:center'>🍽️</div>",
@@ -481,7 +486,7 @@ if query_params.get("page") == "order":
                 first_row = variants_df.iloc[0]
                 with col_img:
                     if first_row.get("image") is not None:
-                        st.image(first_row["image"], width=110)
+                        st.image(first_row["image"], width=170)
                     else:
                         st.markdown(
                             "<div style='font-size:44px; text-align:center'>🍽️</div>",
@@ -633,7 +638,7 @@ if query_params.get("page") == "order":
 
         if submitted_order:
             cart_items = _collect_cart_items()
-            items = [(name, qty, price) for name, qty, price, _cat in cart_items]
+            items = [(name, qty, price, _is_drink_category(cat)) for name, qty, price, cat in cart_items]
             # limit ของย่าง+ของทอด รวมกันไม่เกิน 5 ไม้ต่อการสั่ง 1 รอบ (เฉพาะโซนบุฟเฟ่ Izakaya) — สั่งรอบใหม่ได้เรื่อยๆ แค่ไม่เกิน 5 ต่อรอบ
             skewer_fried_qty = sum(
                 qty for _name, qty, _price, cat in cart_items if cat in SKEWER_FRIED_CATEGORIES
@@ -649,8 +654,15 @@ if query_params.get("page") == "order":
                 )
             else:
                 create_order(table_no, items)
-                total = sum(qty * price for _, qty, price in items)
-                st.success(f"สั่งอาหารเรียบร้อย! รวม {total:,.0f} บาท ทางร้านกำลังเตรียมให้ครับ 🙏")
+                total = sum(qty * price for _, qty, price, _is_drink in items)
+                # เคลียร์ตะกร้า กันลูกค้ากดสั่งซ้ำ (เผื่อเน็ตช้าแล้วกดปุ่มซ้ำ ของเดิมจะได้ไม่ค้างอยู่ให้สั่งซ้ำอีกรอบ)
+                for name, _qty, _price, _cat in cart_items:
+                    st.session_state.pop(f"cust_qty_{name}", None)
+                for sg_key in list(st.session_state.keys()):
+                    if sg_key.startswith("cust_qty_sized_"):
+                        st.session_state[sg_key] = 0
+                st.session_state["order_just_placed_total"] = total
+                st.rerun()
 
     st.stop()
 
@@ -916,9 +928,9 @@ elif page == "🍽️ เมนูอาหาร":
                 image_bytes = None
                 if uploaded_image is not None:
                     img = Image.open(uploaded_image)
-                    img.thumbnail((600, 600))  # ย่อรูปให้ไม่ใหญ่เกินไป โหลดเร็วขึ้น
+                    img.thumbnail((1200, 1200))  # ย่อรูปแค่กันไฟล์ใหญ่เกินจำเป็น แต่คมชัดพอโชว์ในเว็บ
                     img_buf = io.BytesIO()
-                    img.convert("RGB").save(img_buf, format="JPEG", quality=85)
+                    img.convert("RGB").save(img_buf, format="JPEG", quality=92)
                     image_bytes = img_buf.getvalue()
                 set_menu_price(
                     menu_name, price, final_category, image_bytes,
@@ -1090,9 +1102,9 @@ elif page == "🍽️ เมนูอาหาร":
                     matched_menu_name = exact_name_map.get(file_stem) or primary_key_map.get(file_stem)
                     if matched_menu_name:
                         img = Image.open(img_file)
-                        img.thumbnail((600, 600))
+                        img.thumbnail((1200, 1200))  # คมชัดพอโชว์ในเว็บ
                         img_buf = io.BytesIO()
-                        img.convert("RGB").save(img_buf, format="JPEG", quality=85)
+                        img.convert("RGB").save(img_buf, format="JPEG", quality=92)
                         matched_row = current_menu_df[current_menu_df["menu_name"] == matched_menu_name].iloc[0]
                         # ส่งค่าฟิลด์อื่นๆ ที่มีอยู่เดิมกลับไปด้วย กันไม่ให้คำอธิบาย/โซน/ช่วงเวลาฯลฯ ถูกเซฟทับเป็นค่าว่าง ตอนแค่จะอัปเดตรูป
                         set_menu_price(
@@ -1313,26 +1325,38 @@ elif page == "💰 การเงิน":
 # ================= หน้า: ครัว (ออเดอร์จาก QR) — เฉพาะรายการอาหาร ไม่รวมเครื่องดื่ม =================
 elif page == "👨‍🍳 ครัว (ออเดอร์)":
     st.header("👨‍🍳 ออเดอร์อาหารจากลูกค้า")
-    st.caption("หน้านี้โชว์เฉพาะรายการอาหาร")
+    st.caption("หน้านี้โชว์เฉพาะรายการอาหาร — เครื่องดื่มจะไปแจ้งเตือนฝั่งแคชเชียร์แยกต่างหาก | หน้าจอรีเฟรชอัตโนมัติทุก 5 วินาที พร้อมเสียงแจ้งเตือนเมื่อมีออเดอร์ใหม่")
 
-    if st.button("🔄 รีเฟรชออเดอร์ใหม่"):
-        st.rerun()
+    @st.fragment(run_every="5s")
+    def _kitchen_orders_fragment():
+        active_orders = get_active_orders()
 
-    active_orders = get_active_orders()
+        # เสียงแจ้งเตือนออเดอร์ใหม่ — เทียบรายการ id ออเดอร์กับรอบที่แล้ว ถ้ามี id ใหม่โผล่มาค่อยเล่นเสียง
+        current_ids = set(active_orders["id"].tolist())
+        seen_ids = st.session_state.get("kitchen_seen_order_ids")
+        if seen_ids is not None and (current_ids - seen_ids):
+            components.html(
+                f'<audio autoplay><source src="data:audio/wav;base64,{STAFF_CALL_BEEP_B64}" type="audio/wav"></audio>',
+                height=0,
+            )
+        st.session_state["kitchen_seen_order_ids"] = current_ids
 
-    if active_orders.empty:
-        st.info("ยังไม่มีออเดอร์ใหม่ตอนนี้")
-    else:
+        if active_orders.empty:
+            st.info("ยังไม่มีออเดอร์ใหม่ตอนนี้")
+            return
+
         shown_any = False
+        queue_no = 0
         for _, order in active_orders.iterrows():
             items_df = get_order_items(order["id"])
             food_items = items_df[~items_df["category"].apply(_is_drink_category)]
             if food_items.empty:
                 continue  # ออเดอร์นี้มีแต่เครื่องดื่ม ไม่ต้องโชว์ในครัว
+            queue_no += 1
             shown_any = True
             with st.container(border=True):
-                st.subheader(f"โต๊ะ {order['table_no']} — ออเดอร์ #{order['id']} ({order['status']})")
-                st.caption(order["created_at"])
+                st.subheader(f"🔢 คิวที่ {queue_no} — โต๊ะ {order['table_no']} (ออเดอร์ #{order['id']}, {order['status']})")
+                st.caption(f"สั่งเข้ามาเมื่อ {order['created_at']} — เรียงจากคิวที่มาก่อนไปหลังเสมอ")
                 st.dataframe(food_items[["menu_name", "qty", "price"]], use_container_width=True)
 
                 col1, col2, col3 = st.columns(3)
@@ -1356,29 +1380,42 @@ elif page == "👨‍🍳 ครัว (ออเดอร์)":
         if not shown_any:
             st.info("ยังไม่มีออเดอร์อาหารใหม่ตอนนี้")
 
+    _kitchen_orders_fragment()
+
 # ================= หน้า: แคชเชียร์ (ออเดอร์เครื่องดื่มจาก QR) =================
 elif page == "🥤 แคชเชียร์ (เครื่องดื่ม)":
     st.header("🥤 ออเดอร์เครื่องดื่มจากลูกค้า")
-    st.caption("หน้านี้โชว์เฉพาะรายการเครื่องดื่ม")
+    st.caption("หน้านี้โชว์เฉพาะรายการเครื่องดื่ม — อาหารไปอยู่ฝั่งครัวแยกต่างหาก | หน้าจอรีเฟรชอัตโนมัติทุก 5 วินาที พร้อมเสียงแจ้งเตือนเมื่อมีออเดอร์ใหม่")
 
-    if st.button("🔄 รีเฟรชออเดอร์ใหม่", key="refresh_drinks"):
-        st.rerun()
+    @st.fragment(run_every="5s")
+    def _cashier_drink_orders_fragment():
+        active_drink_orders = get_active_drink_orders()
 
-    active_drink_orders = get_active_drink_orders()
+        current_ids = set(active_drink_orders["id"].tolist())
+        seen_ids = st.session_state.get("cashier_seen_order_ids")
+        if seen_ids is not None and (current_ids - seen_ids):
+            components.html(
+                f'<audio autoplay><source src="data:audio/wav;base64,{STAFF_CALL_BEEP_B64}" type="audio/wav"></audio>',
+                height=0,
+            )
+        st.session_state["cashier_seen_order_ids"] = current_ids
 
-    if active_drink_orders.empty:
-        st.info("ยังไม่มีออเดอร์เครื่องดื่มใหม่ตอนนี้")
-    else:
+        if active_drink_orders.empty:
+            st.info("ยังไม่มีออเดอร์เครื่องดื่มใหม่ตอนนี้")
+            return
+
         shown_any = False
+        queue_no = 0
         for _, order in active_drink_orders.iterrows():
             items_df = get_order_items(order["id"])
             drink_items = items_df[items_df["category"].apply(_is_drink_category)]
             if drink_items.empty:
                 continue  # ออเดอร์นี้มีแต่อาหาร ไม่ต้องโชว์ฝั่งแคชเชียร์
+            queue_no += 1
             shown_any = True
             with st.container(border=True):
-                st.subheader(f"โต๊ะ {order['table_no']} — ออเดอร์ #{order['id']} ({order['drink_status']})")
-                st.caption(order["created_at"])
+                st.subheader(f"🔢 คิวที่ {queue_no} — โต๊ะ {order['table_no']} (ออเดอร์ #{order['id']}, {order['drink_status']})")
+                st.caption(f"สั่งเข้ามาเมื่อ {order['created_at']} — เรียงจากคิวที่มาก่อนไปหลังเสมอ")
                 st.dataframe(drink_items[["menu_name", "qty", "price"]], use_container_width=True)
 
                 col1, col2 = st.columns(2)
@@ -1394,6 +1431,8 @@ elif page == "🥤 แคชเชียร์ (เครื่องดื่�
                         st.rerun()
         if not shown_any:
             st.info("ยังไม่มีออเดอร์เครื่องดื่มใหม่ตอนนี้")
+
+    _cashier_drink_orders_fragment()
 
 # ================= หน้า: สรุปยอดต่อโต๊ะ (สำหรับแคชเชียร์) =================
 elif page == "🧾 สรุปยอดต่อโต๊ะ":
@@ -1451,6 +1490,19 @@ elif page == "🧾 สรุปยอดต่อโต๊ะ":
             with st.expander(f"โต๊ะ {t_no} — ยอดรวม {grand_total:,.0f} บาท", expanded=True):
                 st.dataframe(grouped, use_container_width=True, hide_index=True)
                 st.markdown(f"### รวมทั้งหมด: {grand_total:,.0f} บาท")
+                confirm_key = f"confirm_del_table_{t_no}"
+                confirmed = st.checkbox("ยืนยันว่าต้องการลบออเดอร์ทั้งหมดของโต๊ะนี้ (ลบถาวร กู้คืนไม่ได้)", key=confirm_key)
+                if st.button(f"🗑️ ลบออเดอร์ทั้งหมดของโต๊ะ {t_no}", key=f"del_table_{t_no}", disabled=not confirmed):
+                    delete_orders_by_table(t_no)
+                    st.success(f"ลบออเดอร์ของโต๊ะ {t_no} เรียบร้อยแล้ว")
+                    st.rerun()
+
+        st.divider()
+        render_delete_all_button(
+            "ลบออเดอร์ทุกโต๊ะทั้งหมด", "confirm_delete_all_orders", "btn_delete_all_orders",
+            delete_all_orders,
+            success_message="ลบออเดอร์ทั้งหมดเรียบร้อยแล้วครับ — เหมาะกับตอนเคลียร์ข้อมูลทดสอบก่อนเปิดใช้งานจริง",
+        )
 
 # ================= หน้า: QR สั่งอาหาร =================
 elif page == "📱 QR สั่งอาหาร":
