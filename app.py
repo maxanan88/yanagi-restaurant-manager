@@ -1355,7 +1355,7 @@ elif page == "👨‍🍳 ครัว (ออเดอร์)":
             queue_no += 1
             shown_any = True
             with st.container(border=True):
-                st.subheader(f"🔢 คิวที่ {queue_no} — โต๊ะ {order['table_no']} (ออเดอร์ #{order['id']}, {order['status']})")
+                st.subheader(f" คิวที่ {queue_no} — โต๊ะ {order['table_no']} (ออเดอร์ #{order['id']}, {order['status']})")
                 st.caption(f"สั่งเข้ามาเมื่อ {order['created_at']} — เรียงจากคิวที่มาก่อนไปหลังเสมอ")
                 st.dataframe(food_items[["menu_name", "qty", "price"]], use_container_width=True)
 
@@ -1414,7 +1414,7 @@ elif page == "🥤 แคชเชียร์ (เครื่องดื่�
             queue_no += 1
             shown_any = True
             with st.container(border=True):
-                st.subheader(f"🔢 คิวที่ {queue_no} — โต๊ะ {order['table_no']} (ออเดอร์ #{order['id']}, {order['drink_status']})")
+                st.subheader(f" คิวที่ {queue_no} — โต๊ะ {order['table_no']} (ออเดอร์ #{order['id']}, {order['drink_status']})")
                 st.caption(f"สั่งเข้ามาเมื่อ {order['created_at']} — เรียงจากคิวที่มาก่อนไปหลังเสมอ")
                 st.dataframe(drink_items[["menu_name", "qty", "price"]], use_container_width=True)
 
