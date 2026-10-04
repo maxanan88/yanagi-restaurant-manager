@@ -328,6 +328,7 @@ def set_menu_price(menu_name, price, category="อื่นๆ", image_bytes=Non
     """, (menu_name, price, category, image_bytes, description, 1 if is_recommended else 0, size_group, size_label, time_from, time_to, days_available, zones))
     conn.commit()
     conn.close()
+    get_menu_list.clear()  # ล้างแคชเมนู ให้เห็นการแก้ไขทันที ไม่ต้องรอ 15 วิ
 
 
 def get_all_categories():
@@ -342,6 +343,7 @@ def delete_menu_item(menu_name):
     conn.execute("DELETE FROM menu_prices WHERE menu_name = ?", (menu_name,))
     conn.commit()
     conn.close()
+    get_menu_list.clear()
 
 
 def delete_all_menu_items():
@@ -350,6 +352,7 @@ def delete_all_menu_items():
     conn.execute("DELETE FROM menu_prices")
     conn.commit()
     conn.close()
+    get_menu_list.clear()
 
 
 # ---------------- Sales log (สำหรับหน้ารายงาน) ----------------
@@ -421,8 +424,10 @@ def sell_menu(menu_name, qty_sold):
     conn.close()
 
 
+@st.cache_data(ttl=15, show_spinner=False)
 def get_menu_list():
-    """เอาไว้แสดงเมนู+ราคา+รูป+คำอธิบาย+แนะนำ+กลุ่มไซส์+ช่วงเวลา ให้ลูกค้าดูตอนสั่งอาหารผ่าน QR"""
+    """เอาไว้แสดงเมนู+ราคา+รูป+คำอธิบาย+แนะนำ+กลุ่มไซส์+ช่วงเวลา ให้ลูกค้าดูตอนสั่งอาหารผ่าน QR
+    แคชไว้ 15 วินาที ลดเวลาโหลดหน้าเว็บ (เมนูไม่ได้เปลี่ยนบ่อยขนาดต้องเช็คทุกครั้งที่กดปุ่ม)"""
     conn = get_connection()
     rows = conn.execute(
         "SELECT menu_name, price, category, image, description, is_recommended, size_group, size_label, time_from, time_to, days_available, zones FROM menu_prices ORDER BY menu_name"
@@ -434,15 +439,25 @@ def get_menu_list():
 # ---------------- Orders (สั่งอาหารผ่าน QR) ----------------
 
 def create_order(table_no, items):
-    """items คือ list ของ (menu_name, qty, price)"""
+    """
+    items คือ list ของ (menu_name, qty, price, is_drink)
+    is_drink บอกว่าแถวนี้เป็นเครื่องดื่มไหม — ใช้ตัดสินสถานะเริ่มต้น:
+    ถ้าออเดอร์นี้ไม่มีเครื่องดื่มเลย จะปิด drink_status เป็น "เสร็จแล้ว" ทันที (ไม่งั้นโต๊ะจะค้างว่า "ยังไม่เสร็จ" ตลอดไป
+    เพราะไม่มีรายการเครื่องดื่มให้กดจบที่ฝั่งแคชเชียร์เลย) และเช่นเดียวกันฝั่งอาหารถ้าไม่มีเลยก็ปิด status ทันที
+    """
+    has_food = any(not is_drink for _, _, _, is_drink in items)
+    has_drink = any(is_drink for _, _, _, is_drink in items)
+    initial_status = "รอทำ" if has_food else "เสร็จแล้ว"
+    initial_drink_status = "รอทำ" if has_drink else "เสร็จแล้ว"
+
     conn = get_connection()
     conn.execute(
-        "INSERT INTO orders (table_no, created_at, status) VALUES (?, ?, ?)",
-        (table_no, now_bangkok_str(), "รอทำ")
+        "INSERT INTO orders (table_no, created_at, status, drink_status) VALUES (?, ?, ?, ?)",
+        (table_no, now_bangkok_str(), initial_status, initial_drink_status)
     )
     order_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-    for menu_name, qty, price in items:
+    for menu_name, qty, price, _is_drink in items:
         conn.execute(
             "INSERT INTO order_items (order_id, menu_name, qty, price) VALUES (?, ?, ?, ?)",
             (order_id, menu_name, qty, price)
@@ -450,6 +465,7 @@ def create_order(table_no, items):
 
     conn.commit()
     conn.close()
+    return order_id
 
 
 def get_active_orders():
@@ -496,6 +512,35 @@ def get_order_items(order_id):
     ).fetchall()
     conn.close()
     return pd.DataFrame(rows, columns=["id", "order_id", "menu_name", "qty", "price", "category"])
+
+
+def delete_order(order_id):
+    """ลบออเดอร์นี้ทั้งอัน (ใช้ลบออเดอร์ทดสอบ หรือออเดอร์ที่สั่งผิด/ซ้ำ) — ลบถาวร กู้คืนไม่ได้"""
+    conn = get_connection()
+    conn.execute("DELETE FROM order_items WHERE order_id = ?", (order_id,))
+    conn.execute("DELETE FROM orders WHERE id = ?", (order_id,))
+    conn.commit()
+    conn.close()
+
+
+def delete_orders_by_table(table_no):
+    """ลบออเดอร์ทั้งหมดของโต๊ะนี้ทีเดียว (ทั้งที่เสร็จแล้วและยังไม่เสร็จ) — ใช้ตอนอยากเคลียร์บิลโต๊ะนี้ให้เริ่มใหม่ ลบถาวร กู้คืนไม่ได้"""
+    conn = get_connection()
+    order_ids = [r[0] for r in conn.execute("SELECT id FROM orders WHERE table_no = ?", (table_no,)).fetchall()]
+    for oid in order_ids:
+        conn.execute("DELETE FROM order_items WHERE order_id = ?", (oid,))
+    conn.execute("DELETE FROM orders WHERE table_no = ?", (table_no,))
+    conn.commit()
+    conn.close()
+
+
+def delete_all_orders():
+    """ลบออเดอร์ทั้งหมดทีเดียว (เอาไว้เคลียร์ข้อมูลทดสอบก่อนเปิดใช้งานจริง) — ลบถาวร กู้คืนไม่ได้"""
+    conn = get_connection()
+    conn.execute("DELETE FROM order_items")
+    conn.execute("DELETE FROM orders")
+    conn.commit()
+    conn.close()
 
 
 def update_drink_status(order_id, status):
