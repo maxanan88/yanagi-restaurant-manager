@@ -277,8 +277,8 @@ def complete_drink_order(order_id, table_no):
     update_drink_status(order_id, "เสร็จแล้ว")
 
 
-def print_kitchen_ticket(order_row, items_df):
-    """เปิดหน้าต่างพิมพ์ (ผ่านเบราว์เซอร์) เป็นใบสั่งอาหารขนาดกระดาษม้วน 80mm ให้ครัว
+def print_kitchen_ticket(order_row, items_df, label="ใบสั่งอาหาร (ครัว)"):
+    """เปิดหน้าต่างพิมพ์ (ผ่านเบราว์เซอร์) เป็นใบสั่งขนาดกระดาษม้วน 80mm ให้ครัว/แคชเชียร์
     หมายเหตุ: เครื่องพิมพ์ใบเสร็จต้องติดตั้งเป็นเครื่องพิมพ์ปกติบนเครื่องที่เปิดหน้านี้อยู่ก่อน"""
     rows_html = "".join(
         f"<tr><td>{r['menu_name']}</td><td style='text-align:right; white-space:nowrap'>x{int(r['qty'])}</td></tr>"
@@ -301,7 +301,7 @@ def print_kitchen_ticket(order_row, items_df):
     </head>
     <body onload="window.print()">
         <h2>{RESTAURANT_NAME}</h2>
-        <div class="meta">ใบสั่งอาหาร (ครัว)</div>
+        <div class="meta">{label}</div>
         <hr>
         <div class="meta" style="text-align:left; font-size:15px; font-weight:bold">
             โต๊ะ {order_row['table_no']} — ออเดอร์ #{order_row['id']}
@@ -1355,7 +1355,7 @@ elif page == "👨‍🍳 ครัว (ออเดอร์)":
             queue_no += 1
             shown_any = True
             with st.container(border=True):
-                st.subheader(f" คิวที่ {queue_no} — โต๊ะ {order['table_no']} (ออเดอร์ #{order['id']}, {order['status']})")
+                st.subheader(f"🔢 คิวที่ {queue_no} — โต๊ะ {order['table_no']} (ออเดอร์ #{order['id']}, {order['status']})")
                 st.caption(f"สั่งเข้ามาเมื่อ {order['created_at']} — เรียงจากคิวที่มาก่อนไปหลังเสมอ")
                 st.dataframe(food_items[["menu_name", "qty", "price"]], use_container_width=True)
 
@@ -1414,11 +1414,11 @@ elif page == "🥤 แคชเชียร์ (เครื่องดื่�
             queue_no += 1
             shown_any = True
             with st.container(border=True):
-                st.subheader(f" คิวที่ {queue_no} — โต๊ะ {order['table_no']} (ออเดอร์ #{order['id']}, {order['drink_status']})")
+                st.subheader(f"🔢 คิวที่ {queue_no} — โต๊ะ {order['table_no']} (ออเดอร์ #{order['id']}, {order['drink_status']})")
                 st.caption(f"สั่งเข้ามาเมื่อ {order['created_at']} — เรียงจากคิวที่มาก่อนไปหลังเสมอ")
                 st.dataframe(drink_items[["menu_name", "qty", "price"]], use_container_width=True)
 
-                col1, col2 = st.columns(2)
+                col1, col2, col3 = st.columns(3)
                 with col1:
                     if order["drink_status"] == "รอทำ":
                         if st.button("🥤 เริ่มทำ", key=f"drink_start_{order['id']}"):
@@ -1429,6 +1429,13 @@ elif page == "🥤 แคชเชียร์ (เครื่องดื่�
                         complete_drink_order(order["id"], order["table_no"])
                         st.success(f"ส่งเครื่องดื่มโต๊ะ {order['table_no']} เรียบร้อย! ✅")
                         st.rerun()
+                with col3:
+                    if st.button("🖨️ พิมพ์ใบสั่ง", key=f"print_drink_{order['id']}"):
+                        st.session_state[f"show_print_drink_{order['id']}"] = True
+
+                if st.session_state.get(f"show_print_drink_{order['id']}"):
+                    print_kitchen_ticket(order, drink_items, label="ใบสั่งเครื่องดื่ม (แคชเชียร์)")
+                    st.session_state[f"show_print_drink_{order['id']}"] = False
         if not shown_any:
             st.info("ยังไม่มีออเดอร์เครื่องดื่มใหม่ตอนนี้")
 
