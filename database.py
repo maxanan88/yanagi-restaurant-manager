@@ -1,5 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+import math
+import threading
 import unicodedata
 import streamlit as st
 import pandas as pd
@@ -10,8 +12,25 @@ import libsql
 BANGKOK_TZ = ZoneInfo("Asia/Bangkok")
 
 
+# รูปแบบเวลาที่เก็บในฐานข้อมูลและโชว์ให้ครัว: 2026-10-04 23:02:49 (ไม่มีไมโครวินาที ไม่มี +07:00)
+# เก็บเป็นเวลาไทยล้วนๆ ด้วย เพราะ SQLite strftime() จะแปลง "+07:00" เป็น UTC ทำให้ยอดขายช่วง 00:00-06:59
+# ของวันที่ 1 ถูกนับเป็นเดือนก่อนหน้าในรายงานรายเดือน
+TS_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+def now_bangkok():
+    return datetime.now(BANGKOK_TZ)
+
+
 def now_bangkok_str():
-    return str(datetime.now(BANGKOK_TZ))
+    return now_bangkok().strftime(TS_FORMAT)
+
+
+def fmt_ts(value):
+    """ตัดเวลาให้เหลือ YYYY-MM-DD HH:MM:SS (รองรับแถวเก่าที่ยังมี .025878+07:00 ติดมา)"""
+    if value is None:
+        return ""
+    return str(value).replace("T", " ")[:19]
 
 # ---------------- เชื่อมต่อฐานข้อมูล Turso (Cloud) ----------------
 # เปลี่ยนจาก SQLite ไฟล์ในเครื่อง (หายทุกครั้งที่แอป redeploy/restart บน Streamlit Cloud)
@@ -153,6 +172,26 @@ def init_db():
             status TEXT NOT NULL DEFAULT 'pending'
         )
     """)
+
+    # ---- v4: โซนของออเดอร์ + หมายเหตุรายรายการ + index สำหรับ query หน้าครัว ----
+    orders_columns = [row[1] for row in conn.execute("PRAGMA table_info(orders)").fetchall()]
+    if "zone" not in orders_columns:
+        conn.execute("ALTER TABLE orders ADD COLUMN zone TEXT")
+    order_items_columns = [row[1] for row in conn.execute("PRAGMA table_info(order_items)").fetchall()]
+    if "note" not in order_items_columns:
+        conn.execute("ALTER TABLE order_items ADD COLUMN note TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_drink_status ON orders(drink_status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_table_created ON orders(table_no, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_staff_calls_room ON staff_calls(room_name, status)")
+
+    # ทำความสะอาดเวลาเก่าที่มีไมโครวินาที/+07:00 (idempotent: แถวที่สะอาดแล้วจะไม่ถูกแตะ)
+    # ค่าเดิมเป็นเวลาไทยอยู่แล้ว การตัดเหลือ 19 ตัวอักษรจึงไม่เปลี่ยนความหมายของเวลา
+    for _table, _column in (("orders", "created_at"), ("staff_calls", "created_at"), ("sales_log", "date")):
+        conn.execute(
+            f"UPDATE {_table} SET {_column} = substr(replace({_column}, 'T', ' '), 1, 19) WHERE length({_column}) > 19"
+        )
 
     conn.commit()
     conn.close()
@@ -437,165 +476,372 @@ def get_menu_list():
 
 
 # ---------------- Orders (สั่งอาหารผ่าน QR) ----------------
+# เส้นทาง "ออเดอร์/เรียกพนักงาน" ถูกเรียกถี่ที่สุด (หน้าครัว/แคชเชียร์รีเฟรชทุก 5 วินาที) จึงใช้ connection ร่วมกัน
+# ผ่าน st.cache_resource แทนการเปิดใหม่ทุกฟังก์ชัน ส่วนหน้าแอดมินที่ใช้นานๆ ครั้ง (สต็อก/เมนู/การเงิน) คงเดิมไว้
+# ข้างบนทั้งหมด ไม่แตะ เพื่อไม่ให้ของที่ใช้งานได้จริงพัง
 
-def create_order(table_no, items):
+ORDER_WAITING = "รอทำ"
+ORDER_COOKING = "กำลังทำ"
+ORDER_DONE = "เสร็จแล้ว"
+
+ORDER_COOLDOWN_SECONDS = 15          # โต๊ะเดียวกันสั่งรอบใหม่ได้ทุกกี่วินาที (กันยิงออเดอร์รัว)
+MAX_WAITING_ORDERS_PER_TABLE = 6     # โต๊ะเดียวมีออเดอร์ "รอทำ" ค้างได้สูงสุดกี่ออเดอร์
+STAFF_CALL_COOLDOWN_SECONDS = 30     # ห้องเดียวกดเรียกพนักงานซ้ำได้ทุกกี่วินาที (และไม่สร้างซ้ำถ้ายังไม่มีคนรับทราบ)
+NOTE_MAX_LENGTH = 100                # ความยาวหมายเหตุสูงสุดต่อรายการ
+
+_DB_LOCK = threading.RLock()
+
+
+class OrderRejected(Exception):
+    """ออเดอร์ถูกปฏิเสธด้วยเหตุผลทางธุรกิจ (ไม่ใช่ error ของระบบ) code: empty / cooldown / too_many_waiting"""
+
+    def __init__(self, code, retry_after=0):
+        super().__init__(code)
+        self.code = code
+        self.retry_after = retry_after
+
+
+@st.cache_resource(show_spinner=False)
+def _shared_connection():
+    return get_connection()
+
+
+def _run(fn):
+    """รันงานฐานข้อมูลเป็น transaction เดียวบน connection ร่วม
+    - ล็อกกัน thread ของ Streamlit หลาย session ใช้ connection เดียวพร้อมกันแล้ว transaction ปนกัน
+    - ถ้า connection หมดอายุ/หลุด (Turso ปิด stream ที่ว่างนาน) จะเชื่อมต่อใหม่แล้วลองอีกครั้ง 1 รอบ
+    - OrderRejected ไม่ใช่ error ของระบบ จึงไม่ retry"""
+    with _DB_LOCK:
+        last_error = None
+        for _attempt in range(2):
+            conn = _shared_connection()
+            try:
+                result = fn(conn)
+                conn.commit()
+                return result
+            except OrderRejected:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise
+            except Exception as exc:
+                last_error = exc
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                _shared_connection.clear()
+        raise last_error
+
+
+def clean_note(note):
+    """หมายเหตุจากลูกค้า: ตัดอักขระควบคุม ยุบช่องว่าง จำกัดความยาว (กันรกหน้าครัว/ใบสั่งพิมพ์)"""
+    if not note:
+        return ""
+    text = "".join(ch for ch in str(note) if ch >= " " and ch != "\x7f")
+    return " ".join(text.split())[:NOTE_MAX_LENGTH]
+
+
+def _status_column(kind):
+    if kind == "food":
+        return "status"
+    if kind == "drink":
+        return "drink_status"
+    raise ValueError("kind must be 'food' or 'drink'")
+
+
+def create_order(table_no, items, zone=None):
     """
-    items คือ list ของ (menu_name, qty, price, is_drink)
-    is_drink บอกว่าแถวนี้เป็นเครื่องดื่มไหม — ใช้ตัดสินสถานะเริ่มต้น:
-    ถ้าออเดอร์นี้ไม่มีเครื่องดื่มเลย จะปิด drink_status เป็น "เสร็จแล้ว" ทันที (ไม่งั้นโต๊ะจะค้างว่า "ยังไม่เสร็จ" ตลอดไป
-    เพราะไม่มีรายการเครื่องดื่มให้กดจบที่ฝั่งแคชเชียร์เลย) และเช่นเดียวกันฝั่งอาหารถ้าไม่มีเลยก็ปิด status ทันที
+    items: list ของ (menu_name, qty, price, is_drink) หรือ (menu_name, qty, price, is_drink, note)
+    is_drink ใช้ตัดสินสถานะเริ่มต้น: ถ้าออเดอร์ไม่มีเครื่องดื่มเลย drink_status จะเป็น "เสร็จแล้ว" ทันที (และเช่นกันฝั่งอาหาร)
+
+    กันสแปมที่ระดับฐานข้อมูล (ไม่ใช่แค่ session ของเบราว์เซอร์ ซึ่งเปิดแท็บใหม่ก็หลบได้):
+      - โต๊ะเดียวกันสั่งซ้ำภายใน ORDER_COOLDOWN_SECONDS วินาที -> OrderRejected("cooldown")
+      - โต๊ะเดียวกันมีออเดอร์รอทำค้างเกิน MAX_WAITING_ORDERS_PER_TABLE -> OrderRejected("too_many_waiting")
+    การเช็คกับการ INSERT อยู่ในคำสั่งเดียว (INSERT ... SELECT ... WHERE NOT EXISTS) จึงไม่มีช่องให้สองคำขอลอดพร้อมกัน
     """
-    has_food = any(not is_drink for _, _, _, is_drink in items)
-    has_drink = any(is_drink for _, _, _, is_drink in items)
-    initial_status = "รอทำ" if has_food else "เสร็จแล้ว"
-    initial_drink_status = "รอทำ" if has_drink else "เสร็จแล้ว"
+    table_no = str(table_no).strip()
+    clean_items = []
+    for item in items or []:
+        menu_name, qty, price, is_drink = item[0], int(item[1]), float(item[2]), bool(item[3])
+        note = clean_note(item[4]) if len(item) > 4 else ""
+        if qty > 0:
+            clean_items.append((menu_name, qty, price, is_drink, note))
+    if not table_no or not clean_items:
+        raise OrderRejected("empty")
 
-    conn = get_connection()
-    conn.execute(
-        "INSERT INTO orders (table_no, created_at, status, drink_status) VALUES (?, ?, ?, ?)",
-        (table_no, now_bangkok_str(), initial_status, initial_drink_status)
-    )
-    order_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    has_food = any(not is_drink for _, _, _, is_drink, _ in clean_items)
+    has_drink = any(is_drink for _, _, _, is_drink, _ in clean_items)
+    initial_status = ORDER_WAITING if has_food else ORDER_DONE
+    initial_drink_status = ORDER_WAITING if has_drink else ORDER_DONE
 
-    for menu_name, qty, price, _is_drink in items:
+    now = now_bangkok()
+    now_str = now.strftime(TS_FORMAT)
+    cutoff = (now - timedelta(seconds=ORDER_COOLDOWN_SECONDS)).strftime(TS_FORMAT)
+
+    def _tx(conn):
+        inserted = conn.execute(
+            """
+            INSERT INTO orders (table_no, created_at, status, drink_status, zone)
+            SELECT ?, ?, ?, ?, ?
+            WHERE NOT EXISTS (SELECT 1 FROM orders WHERE table_no = ? AND created_at > ?)
+              AND (SELECT COUNT(*) FROM orders WHERE table_no = ? AND (status = ? OR drink_status = ?)) < ?
+            RETURNING id
+            """,
+            (table_no, now_str, initial_status, initial_drink_status, zone or None,
+             table_no, cutoff,
+             table_no, ORDER_WAITING, ORDER_WAITING, MAX_WAITING_ORDERS_PER_TABLE),
+        ).fetchall()
+
+        if not inserted:
+            last = conn.execute("SELECT MAX(created_at) FROM orders WHERE table_no = ?", (table_no,)).fetchone()[0]
+            if last and str(last)[:19] > cutoff:
+                elapsed = (now.replace(tzinfo=None) - datetime.strptime(str(last)[:19], TS_FORMAT)).total_seconds()
+                raise OrderRejected("cooldown", max(1, math.ceil(ORDER_COOLDOWN_SECONDS - elapsed)))
+            raise OrderRejected("too_many_waiting")
+
+        order_id = inserted[0][0]
+        placeholders = ",".join(["(?, ?, ?, ?, ?)"] * len(clean_items))
+        params = []
+        for menu_name, qty, price, _is_drink, note in clean_items:
+            params.extend([order_id, menu_name, qty, price, note or None])
         conn.execute(
-            "INSERT INTO order_items (order_id, menu_name, qty, price) VALUES (?, ?, ?, ?)",
-            (order_id, menu_name, qty, price)
+            f"INSERT INTO order_items (order_id, menu_name, qty, price, note) VALUES {placeholders}",
+            tuple(params),
         )
+        return order_id
 
-    conn.commit()
-    conn.close()
-    return order_id
+    return _run(_tx)
+
+
+_BOARD_COLUMNS = ["order_id", "table_no", "created_at", "status", "zone", "menu_name", "qty", "price", "note", "category"]
+
+
+def get_active_order_board(kind):
+    """ออเดอร์ที่ยังไม่เสร็จพร้อมรายการทั้งหมดใน query เดียว (JOIN) — แทนการวน get_order_items() ทีละออเดอร์ (N+1)
+    kind="food" -> ฝั่งครัว (status) | kind="drink" -> ฝั่งแคชเชียร์ (drink_status)
+    คอลัมน์ status ในผลลัพธ์คือสถานะของฝั่งที่ขอ การแยกอาหาร/เครื่องดื่มทำฝั่งแอปด้วย category เหมือนเดิม"""
+    column = _status_column(kind)
+
+    def _q(conn):
+        return conn.execute(
+            f"""
+            SELECT o.id, o.table_no, o.created_at, o.{column}, o.zone,
+                   oi.menu_name, oi.qty, oi.price, oi.note, mp.category
+            FROM orders o
+            JOIN order_items oi ON oi.order_id = o.id
+            LEFT JOIN menu_prices mp ON mp.menu_name = oi.menu_name
+            WHERE o.{column} != ?
+            ORDER BY o.created_at ASC, o.id ASC, oi.id ASC
+            """,
+            (ORDER_DONE,),
+        ).fetchall()
+
+    return pd.DataFrame(_run(_q), columns=_BOARD_COLUMNS)
 
 
 def get_active_orders():
-    """ออเดอร์ที่ฝั่งครัว (อาหาร) ยังไม่เสร็จ — ใช้กับหน้า ครัว (ออเดอร์)"""
-    conn = get_connection()
-    rows = conn.execute(
-        "SELECT id, table_no, created_at, status FROM orders WHERE status != 'เสร็จแล้ว' ORDER BY created_at ASC"
-    ).fetchall()
-    conn.close()
-    return pd.DataFrame(rows, columns=["id", "table_no", "created_at", "status"])
-
-
-def get_active_table_numbers():
-    """โต๊ะที่ยังมีออเดอร์ค้างอยู่ (อาหารหรือเครื่องดื่มอย่างใดอย่างหนึ่งยังไม่เสร็จ) — ใช้กับหน้าสรุปยอดต่อโต๊ะ"""
-    conn = get_connection()
-    rows = conn.execute(
-        "SELECT DISTINCT table_no FROM orders WHERE status != 'เสร็จแล้ว' OR drink_status != 'เสร็จแล้ว'"
-    ).fetchall()
-    conn.close()
-    return [r[0] for r in rows]
+    """ออเดอร์ที่ฝั่งครัว (อาหาร) ยังไม่เสร็จ — ใช้นับในหน้าหลัก"""
+    def _q(conn):
+        return conn.execute(
+            "SELECT id, table_no, created_at, status FROM orders WHERE status != ? ORDER BY created_at ASC, id ASC",
+            (ORDER_DONE,),
+        ).fetchall()
+    return pd.DataFrame(_run(_q), columns=["id", "table_no", "created_at", "status"])
 
 
 def get_active_drink_orders():
-    """ออเดอร์ที่ฝั่งแคชเชียร์ (เครื่องดื่ม) ยังไม่เสร็จ — ใช้กับหน้า แคชเชียร์ (เครื่องดื่ม)"""
-    conn = get_connection()
-    rows = conn.execute(
-        "SELECT id, table_no, created_at, drink_status FROM orders WHERE drink_status != 'เสร็จแล้ว' ORDER BY created_at ASC"
-    ).fetchall()
-    conn.close()
-    return pd.DataFrame(rows, columns=["id", "table_no", "created_at", "drink_status"])
+    """ออเดอร์ที่ฝั่งแคชเชียร์ (เครื่องดื่ม) ยังไม่เสร็จ"""
+    def _q(conn):
+        return conn.execute(
+            "SELECT id, table_no, created_at, drink_status FROM orders WHERE drink_status != ? ORDER BY created_at ASC, id ASC",
+            (ORDER_DONE,),
+        ).fetchall()
+    return pd.DataFrame(_run(_q), columns=["id", "table_no", "created_at", "drink_status"])
+
+
+def get_active_table_numbers():
+    """โต๊ะที่ยังมีออเดอร์ค้างอยู่ (อาหารหรือเครื่องดื่มอย่างใดอย่างหนึ่งยังไม่เสร็จ)"""
+    def _q(conn):
+        return conn.execute(
+            "SELECT DISTINCT table_no FROM orders WHERE status != ? OR drink_status != ?",
+            (ORDER_DONE, ORDER_DONE),
+        ).fetchall()
+    return [r[0] for r in _run(_q)]
 
 
 def get_order_items(order_id):
-    """คืนรายการสินค้าของออเดอร์ พร้อมหมวดหมู่ (join กับ menu_prices) เอาไว้แยกอาหาร/เครื่องดื่ม"""
-    conn = get_connection()
-    rows = conn.execute(
-        """
-        SELECT oi.id, oi.order_id, oi.menu_name, oi.qty, oi.price, mp.category
-        FROM order_items oi
-        LEFT JOIN menu_prices mp ON oi.menu_name = mp.menu_name
-        WHERE oi.order_id = ?
-        """,
-        (order_id,)
-    ).fetchall()
-    conn.close()
-    return pd.DataFrame(rows, columns=["id", "order_id", "menu_name", "qty", "price", "category"])
+    """คืนรายการสินค้าของออเดอร์ พร้อมหมวดหมู่และหมายเหตุ"""
+    def _q(conn):
+        return conn.execute(
+            """
+            SELECT oi.id, oi.order_id, oi.menu_name, oi.qty, oi.price, mp.category, oi.note
+            FROM order_items oi
+            LEFT JOIN menu_prices mp ON oi.menu_name = mp.menu_name
+            WHERE oi.order_id = ?
+            ORDER BY oi.id
+            """,
+            (order_id,),
+        ).fetchall()
+    return pd.DataFrame(_run(_q), columns=["id", "order_id", "menu_name", "qty", "price", "category", "note"])
+
+
+def get_active_order_items_all_tables():
+    """รายการของทุกโต๊ะที่ยังมีออเดอร์ค้าง ใน query เดียว (แทนการ query ทีละโต๊ะ) เอาไว้ทำหน้าสรุปยอดต่อโต๊ะ"""
+    def _q(conn):
+        return conn.execute(
+            """
+            SELECT o.table_no, oi.menu_name, oi.qty, oi.price
+            FROM order_items oi
+            JOIN orders o ON oi.order_id = o.id
+            WHERE o.status != ? OR o.drink_status != ?
+            """,
+            (ORDER_DONE, ORDER_DONE),
+        ).fetchall()
+    return pd.DataFrame(_run(_q), columns=["table_no", "menu_name", "qty", "price"])
+
+
+def get_active_order_items_by_table(table_no):
+    """รวมรายการจากทุกออเดอร์ที่ยังไม่เสร็จของโต๊ะนั้น (คงไว้เผื่อโค้ดเดิมเรียกใช้)"""
+    def _q(conn):
+        return conn.execute(
+            """
+            SELECT oi.menu_name, oi.qty, oi.price
+            FROM order_items oi
+            JOIN orders o ON oi.order_id = o.id
+            WHERE o.table_no = ? AND (o.status != ? OR o.drink_status != ?)
+            """,
+            (table_no, ORDER_DONE, ORDER_DONE),
+        ).fetchall()
+    return pd.DataFrame(_run(_q), columns=["menu_name", "qty", "price"])
+
+
+def _update_status(kind, order_id, status):
+    """เปลี่ยนสถานะได้เฉพาะออเดอร์ที่ยังไม่ปิด — กันหน้าจอเก่า/อีกเครื่องกด "เริ่มทำ" ดันออเดอร์ที่เสร็จแล้วกลับมา
+    (ถ้าถอยสถานะได้ ปุ่ม "เสร็จแล้ว" จะบันทึกยอดขายซ้ำอีกรอบ)"""
+    column = _status_column(kind)
+
+    def _tx(conn):
+        rows = conn.execute(
+            f"UPDATE orders SET {column} = ? WHERE id = ? AND {column} != ? RETURNING id",
+            (status, order_id, ORDER_DONE),
+        ).fetchall()
+        return len(rows) > 0
+
+    return _run(_tx)
+
+
+def update_order_status(order_id, status):
+    return _update_status("food", order_id, status)
+
+
+def update_drink_status(order_id, status):
+    return _update_status("drink", order_id, status)
+
+
+def complete_order(order_id, kind, is_drink_category_fn):
+    """ปิดออเดอร์ฝั่งอาหาร/เครื่องดื่ม พร้อมบันทึกยอดขาย ใน transaction เดียว และบันทึก "ครั้งเดียว" เท่านั้น
+    ลำดับ: UPDATE ... WHERE status != 'เสร็จแล้ว' ก่อน (จองสิทธิ์ปิดออเดอร์) แล้วค่อยเขียน sales_log
+    ถ้าสองเครื่องกดพร้อมกัน/กดซ้ำ จะมีแค่คำสั่งเดียวที่ UPDATE ได้จริง ที่เหลือได้ False และไม่เขียนยอดซ้ำ
+    คืนค่า True = ปิดออเดอร์ครั้งนี้สำเร็จ, False = ออเดอร์ถูกปิดไปแล้ว (หรือไม่มีอยู่)"""
+    column = _status_column(kind)
+    want_drink = kind == "drink"
+    sale_time = now_bangkok_str()
+
+    def _tx(conn):
+        claimed = conn.execute(
+            f"UPDATE orders SET {column} = ? WHERE id = ? AND {column} != ? RETURNING id",
+            (ORDER_DONE, order_id, ORDER_DONE),
+        ).fetchall()
+        if not claimed:
+            return False
+
+        rows = conn.execute(
+            """
+            SELECT oi.menu_name, oi.qty, oi.price, mp.category
+            FROM order_items oi
+            LEFT JOIN menu_prices mp ON oi.menu_name = mp.menu_name
+            WHERE oi.order_id = ?
+            """,
+            (order_id,),
+        ).fetchall()
+        sales = [
+            (sale_time, menu_name, int(qty), qty * price)
+            for menu_name, qty, price, category in rows
+            if bool(is_drink_category_fn(category)) == want_drink
+        ]
+        if sales:
+            placeholders = ",".join(["(?, ?, ?, ?)"] * len(sales))
+            params = tuple(value for sale in sales for value in sale)
+            conn.execute(
+                f"INSERT INTO sales_log (date, menu_name, qty_sold, total_price) VALUES {placeholders}",
+                params,
+            )
+        return True
+
+    return _run(_tx)
 
 
 def delete_order(order_id):
     """ลบออเดอร์นี้ทั้งอัน (ใช้ลบออเดอร์ทดสอบ หรือออเดอร์ที่สั่งผิด/ซ้ำ) — ลบถาวร กู้คืนไม่ได้"""
-    conn = get_connection()
-    conn.execute("DELETE FROM order_items WHERE order_id = ?", (order_id,))
-    conn.execute("DELETE FROM orders WHERE id = ?", (order_id,))
-    conn.commit()
-    conn.close()
+    def _tx(conn):
+        conn.execute("DELETE FROM order_items WHERE order_id = ?", (order_id,))
+        conn.execute("DELETE FROM orders WHERE id = ?", (order_id,))
+    _run(_tx)
 
 
 def delete_orders_by_table(table_no):
-    """ลบออเดอร์ทั้งหมดของโต๊ะนี้ทีเดียว (ทั้งที่เสร็จแล้วและยังไม่เสร็จ) — ใช้ตอนอยากเคลียร์บิลโต๊ะนี้ให้เริ่มใหม่ ลบถาวร กู้คืนไม่ได้"""
-    conn = get_connection()
-    order_ids = [r[0] for r in conn.execute("SELECT id FROM orders WHERE table_no = ?", (table_no,)).fetchall()]
-    for oid in order_ids:
-        conn.execute("DELETE FROM order_items WHERE order_id = ?", (oid,))
-    conn.execute("DELETE FROM orders WHERE table_no = ?", (table_no,))
-    conn.commit()
-    conn.close()
+    """ลบออเดอร์ทั้งหมดของโต๊ะนี้ทีเดียว (ทั้งที่เสร็จแล้วและยังไม่เสร็จ) — ลบถาวร กู้คืนไม่ได้"""
+    def _tx(conn):
+        conn.execute("DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE table_no = ?)", (table_no,))
+        conn.execute("DELETE FROM orders WHERE table_no = ?", (table_no,))
+    _run(_tx)
 
 
 def delete_all_orders():
     """ลบออเดอร์ทั้งหมดทีเดียว (เอาไว้เคลียร์ข้อมูลทดสอบก่อนเปิดใช้งานจริง) — ลบถาวร กู้คืนไม่ได้"""
-    conn = get_connection()
-    conn.execute("DELETE FROM order_items")
-    conn.execute("DELETE FROM orders")
-    conn.commit()
-    conn.close()
-
-
-def update_drink_status(order_id, status):
-    conn = get_connection()
-    conn.execute("UPDATE orders SET drink_status = ? WHERE id = ?", (status, order_id))
-    conn.commit()
-    conn.close()
-
-
-def get_active_order_items_by_table(table_no):
-    """รวมรายการอาหารจากทุกออเดอร์ที่ยังไม่เสร็จของโต๊ะนั้น (เผื่อลูกค้าสั่งหลายรอบ) เอาไว้ทำสรุปยอด"""
-    conn = get_connection()
-    rows = conn.execute(
-        """
-        SELECT oi.menu_name, oi.qty, oi.price
-        FROM order_items oi
-        JOIN orders o ON oi.order_id = o.id
-        WHERE o.table_no = ? AND (o.status != 'เสร็จแล้ว' OR o.drink_status != 'เสร็จแล้ว')
-        """,
-        (table_no,)
-    ).fetchall()
-    conn.close()
-    return pd.DataFrame(rows, columns=["menu_name", "qty", "price"])
-
-
-def update_order_status(order_id, status):
-    conn = get_connection()
-    conn.execute("UPDATE orders SET status = ? WHERE id = ?", (status, order_id))
-    conn.commit()
-    conn.close()
+    def _tx(conn):
+        conn.execute("DELETE FROM order_items")
+        conn.execute("DELETE FROM orders")
+    _run(_tx)
 
 
 # ---------------- Staff calls (ปุ่มเรียกพนักงานจากห้อง VIP) ----------------
 
 def create_staff_call(room_name):
-    conn = get_connection()
-    conn.execute(
-        "INSERT INTO staff_calls (room_name, created_at, status) VALUES (?, ?, ?)",
-        (room_name, now_bangkok_str(), "pending")
-    )
-    conn.commit()
-    conn.close()
+    """คืน True ถ้าสร้างการเรียกใหม่ได้ / False ถ้าถูกกันซ้ำ
+    กันซ้ำ 2 ชั้น: ห้องนี้ยังมีการเรียกที่ยังไม่มีคนรับทราบ หรือเพิ่งเรียกไปไม่ถึง STAFF_CALL_COOLDOWN_SECONDS วินาที"""
+    room_name = str(room_name).strip()[:40]
+    now = now_bangkok()
+    cutoff = (now - timedelta(seconds=STAFF_CALL_COOLDOWN_SECONDS)).strftime(TS_FORMAT)
+
+    def _tx(conn):
+        rows = conn.execute(
+            """
+            INSERT INTO staff_calls (room_name, created_at, status)
+            SELECT ?, ?, 'pending'
+            WHERE NOT EXISTS (
+                SELECT 1 FROM staff_calls WHERE room_name = ? AND (status = 'pending' OR created_at > ?)
+            )
+            RETURNING id
+            """,
+            (room_name, now.strftime(TS_FORMAT), room_name, cutoff),
+        ).fetchall()
+        return len(rows) > 0
+
+    return _run(_tx)
 
 
 def get_pending_staff_calls():
-    conn = get_connection()
-    rows = conn.execute(
-        "SELECT id, room_name, created_at, status FROM staff_calls WHERE status = 'pending' ORDER BY created_at ASC"
-    ).fetchall()
-    conn.close()
-    return pd.DataFrame(rows, columns=["id", "room_name", "created_at", "status"])
+    def _q(conn):
+        return conn.execute(
+            "SELECT id, room_name, created_at, status FROM staff_calls WHERE status = 'pending' ORDER BY created_at ASC, id ASC"
+        ).fetchall()
+    return pd.DataFrame(_run(_q), columns=["id", "room_name", "created_at", "status"])
 
 
 def acknowledge_staff_call(call_id):
-    conn = get_connection()
-    conn.execute("UPDATE staff_calls SET status = 'acknowledged' WHERE id = ?", (call_id,))
-    conn.commit()
-    conn.close()
+    def _tx(conn):
+        conn.execute("UPDATE staff_calls SET status = 'acknowledged' WHERE id = ? AND status = 'pending'", (call_id,))
+    _run(_tx)
