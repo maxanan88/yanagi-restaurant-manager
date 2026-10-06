@@ -379,23 +379,6 @@ def print_kitchen_ticket(order_row, items_df, label="ใบสั่งอาห
 # ================= หน้าสั่งอาหารสำหรับลูกค้า (ไม่ต้อง login) =================
 query_params = st.query_params
 if query_params.get("page") == "order":
-    # หน้าลูกค้า: ซ่อนแถบเมนู/ปุ่ม Share-GitHub-Deploy ของ Streamlit (QR ไม่ใช้ embed=true แล้ว เพราะ embed ทำให้ Streamlit Cloud
-    # แปะแถบ "Built with Streamlit / Fullscreen" ที่โค้ดเราลบไม่ได้ และปุ่ม Fullscreen พาลูกค้าไปหน้าล็อกอิน)
-    st.markdown(
-        """
-        <style>
-        header[data-testid="stHeader"],
-        [data-testid="stToolbar"],
-        [data-testid="stDecoration"],
-        [data-testid="stStatusWidget"],
-        [data-testid="stAppDeployButton"],
-        .stAppDeployButton,
-        #MainMenu,
-        footer { display: none !important; visibility: hidden !important; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
     brand_key = query_params.get("brand", "default")
     contact = CONTACT_INFO.get(brand_key, CONTACT_INFO["default"])
     zone_filter = query_params.get("zone", "").strip()
@@ -1665,7 +1648,7 @@ elif page == "📱 QR สั่งอาหาร":
         elif not is_safe_table_label(table_number):
             st.error("หมายเลขโต๊ะต้องยาวไม่เกิน 20 ตัวอักษร และห้ามมีอักขระพิเศษ < > \" ' & | \\ % `")
         else:
-            # QR ถูกเซ็นด้วย qr_secret: ลูกค้าแก้เลขโต๊ะ/โซนใน URL เองไม่ได้ (หน้าลูกค้าซ่อนแถบของ Streamlit ด้วย CSS ไม่ใช้ embed=true)
+            # QR ถูกเซ็นด้วย qr_secret: ลูกค้าแก้เลขโต๊ะ/โซนใน URL เองไม่ได้ (ซ่อนแถบ Streamlit Cloud ด้วย embed=true)
             order_url = build_order_url(_qr_secret(), base_url, table_number, zone_choice_key, brand_choice)
             qr_img = qrcode.make(order_url)
             buf = io.BytesIO()
