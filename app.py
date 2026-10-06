@@ -533,12 +533,14 @@ if query_params.get("page") == "order":
             return "🍴"
 
 
-        def _render_note_input(qty_key, note_key):
-            """ช่องหมายเหตุ (เช่น ไม่ใส่ต้นหอม / แพ้กุ้ง) โผล่เฉพาะเมนูที่ลูกค้าเลือกจำนวนไว้แล้ว"""
+        def _render_note_input(qty_key, note_key, category_name):
+            """ช่องหมายเหตุ (เช่น ไม่ใส่ผัก / แพ้กุ้ง) โผล่เฉพาะ "อาหาร" ที่ลูกค้าเลือกจำนวนไว้แล้ว (เครื่องดื่มไม่มีช่องหมายเหตุ)"""
+            if _is_drink_category(category_name):
+                return
             if (st.session_state.get(qty_key) or 0) > 0:
                 st.text_input(
                     "📝 หมายเหตุ", key=note_key, max_chars=NOTE_MAX_LENGTH,
-                    placeholder="หมายเหตุ เช่น ไม่ใส่ต้นหอม / แพ้อาหารทะเล (ถ้ามี)",
+                    placeholder="หมายเหตุ เช่น ไม่ใส่ผัก / ไม่เผ็ด / แพ้อาหารทะเล (ถ้ามี)",
                     label_visibility="collapsed",
                 )
 
@@ -560,7 +562,7 @@ if query_params.get("page") == "order":
                     f"{item_label} ({row['price']:,.0f} บาท)",
                     min_value=0, step=1, key=f"cust_qty_{row['menu_name']}"
                 )
-                _render_note_input(f"cust_qty_{row['menu_name']}", f"cust_note_{row['menu_name']}")
+                _render_note_input(f"cust_qty_{row['menu_name']}", f"cust_note_{row['menu_name']}", category_name)
                 if pd.notna(row.get("description")) and str(row.get("description")).strip():
                     st.caption(row["description"])
 
@@ -604,6 +606,7 @@ if query_params.get("page") == "order":
                     _render_note_input(
                         f"cust_qty_sized_{category_name}_{size_group_name}",
                         f"cust_note_sized_{category_name}_{size_group_name}",
+                        category_name,
                     )
                     if pd.notna(selected_row.get("description")) and str(selected_row.get("description")).strip():
                         st.caption(selected_row["description"])
@@ -617,7 +620,7 @@ if query_params.get("page") == "order":
                 for _, r in grp_df[~has_sg].iterrows():
                     q = st.session_state.get(f"cust_qty_{r['menu_name']}", 0)
                     if q and q > 0:
-                        note = clean_note(st.session_state.get(f"cust_note_{r['menu_name']}", ""))
+                        note = "" if _is_drink_category(cat_name) else clean_note(st.session_state.get(f"cust_note_{r['menu_name']}", ""))
                         collected.append((r["menu_name"], q, float(r["price"]), cat_name, note))
                 for sg_name, variants_df in grp_df[has_sg].groupby("size_group"):
                     chosen = st.session_state.get(f"size_choice_{cat_name}_{sg_name}")
@@ -629,7 +632,7 @@ if query_params.get("page") == "order":
                     sel_row = matched.iloc[0]
                     q = st.session_state.get(f"cust_qty_sized_{cat_name}_{sg_name}", 0)
                     if q and q > 0:
-                        note = clean_note(st.session_state.get(f"cust_note_sized_{cat_name}_{sg_name}", ""))
+                        note = "" if _is_drink_category(cat_name) else clean_note(st.session_state.get(f"cust_note_sized_{cat_name}_{sg_name}", ""))
                         collected.append((sel_row["menu_name"], q, float(sel_row["price"]), cat_name, note))
             return collected
 
@@ -658,7 +661,7 @@ if query_params.get("page") == "order":
                         "จำนวน (ท่าน)", min_value=0, step=1,
                         key=f"cust_qty_{prow['menu_name']}",
                     )
-                    _render_note_input(f"cust_qty_{prow['menu_name']}", f"cust_note_{prow['menu_name']}")
+                    _render_note_input(f"cust_qty_{prow['menu_name']}", f"cust_note_{prow['menu_name']}", prow["category"])
 
         # ---------------- หน้าเลือกหมวดหมู่ / รายการเมนูในหมวดที่เลือก (เฉพาะอาหารจริง ไม่รวมราคาแพ็กเกจ) ----------------
         # ลำดับหมวดหมู่ตามที่ร้านต้องการ:
