@@ -539,9 +539,8 @@ if query_params.get("page") == "order":
                 return
             if (st.session_state.get(qty_key) or 0) > 0:
                 st.text_input(
-                    "📝 หมายเหตุ", key=note_key, max_chars=NOTE_MAX_LENGTH,
-                    placeholder="หมายเหตุ เช่น ไม่ใส่ผัก / ไม่เผ็ด / แพ้อาหารทะเล (ถ้ามี)",
-                    label_visibility="collapsed",
+                    ":red[หมายเหตุ]", key=note_key, max_chars=NOTE_MAX_LENGTH,  # Streamlit markdown: ข้อความสีแดงเฉพาะคำว่า "หมายเหตุ"
+                    placeholder="เช่น ไม่ใส่ผัก / ไม่เผ็ด",
                 )
 
         def _render_item_row(row, category_name):
