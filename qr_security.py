@@ -51,6 +51,5 @@ def build_order_url(secret, base_url, table, zone="", brand="default"):
     if brand != "default":
         url += f"&brand={quote(brand, safe='')}"
     url += f"&sig={signature}"
-    # NOTE: no "&embed=true" - embed mode makes Streamlit Cloud add a "Built with Streamlit / Fullscreen" bar we cannot remove.
-    # The toolbar is hidden by CSS on the order page instead (see app.py).
+    url += "&embed=true"  # hides Streamlit Cloud toolbar (not part of the signature)
     return url
