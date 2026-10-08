@@ -21,6 +21,7 @@ from database import (
     create_staff_call, get_pending_staff_calls, acknowledge_staff_call,
     get_active_order_board, get_active_order_items_all_tables, complete_order,
     OrderRejected, NOTE_MAX_LENGTH, clean_note, fmt_ts,
+    get_menu_availability, set_menu_available, set_menus_available,
 )
 from qr_security import is_safe_table_label, verify_order_params, build_order_url
 
@@ -263,6 +264,60 @@ def _init_db_once(_schema_version):
 _init_db_once(DB_SCHEMA_VERSION)
 
 
+def _row_available(row):
+    """เมนูนี้ยังมีขายไหม (is_available: 1 = มีขาย, 0 = หมด) — ไม่มีค่า/อ่านไม่ได้ ถือว่ามีขาย กันเมนูหายเพราะข้อมูลเก่า"""
+    value = row.get("is_available") if hasattr(row, "get") else None
+    if value is None or pd.isna(value):
+        return True
+    return int(value) != 0
+
+
+def render_menu_availability_panel(kind):
+    """หน้าจอพนักงานตั้ง "เมนูหมด" kind="food" (หน้าครัว) หรือ "drink" (หน้าแคชเชียร์) — ใช้ได้ทุกหมวดหมู่ทุกโซน
+    เมนูที่ตั้งเป็นหมดจะขึ้น "หมด" ให้ลูกค้ากดสั่งไม่ได้ทันที และระบบตรวจซ้ำตอนส่งออเดอร์ด้วย (ชื่อ/ราคา/รูปไม่ถูกแตะ)"""
+    want_drink = kind == "drink"
+    title = "🚫 จัดการเมนูหมด (เครื่องดื่ม)" if want_drink else "🚫 จัดการเมนูหมด (อาหาร)"
+    with st.expander(title):
+        menu_status_df = get_menu_availability()
+        if not menu_status_df.empty:
+            menu_status_df = menu_status_df[
+                menu_status_df["category"].apply(lambda c: bool(_is_drink_category(c)) == want_drink)
+            ]
+        if menu_status_df.empty:
+            st.info("ยังไม่มีเมนูในหมวดนี้")
+            return
+
+        sold_out_df = menu_status_df[menu_status_df["is_available"] == 0]
+        if sold_out_df.empty:
+            st.success("ตอนนี้ไม่มีเมนูที่หมด")
+        else:
+            st.warning(f"ตอนนี้หมด {len(sold_out_df)} เมนู: " + " , ".join(sold_out_df["menu_name"].tolist()))
+            if st.button("✅ เปิดขายทุกเมนูที่หมดอีกครั้ง", key=f"avail_reset_all_{kind}"):
+                set_menus_available(sold_out_df["menu_name"].tolist(), True)
+                st.rerun()
+
+        search_text = st.text_input("🔎 ค้นหาเมนู", key=f"avail_search_{kind}", placeholder="พิมพ์บางส่วนของชื่อเมนู").strip().lower()
+        shown_df = menu_status_df
+        if search_text:
+            shown_df = menu_status_df[menu_status_df["menu_name"].str.lower().str.contains(search_text, regex=False)]
+        if shown_df.empty:
+            st.caption("ไม่พบเมนูที่ค้นหา")
+        for category, group_df in shown_df.groupby("category", sort=False):
+            st.markdown(f"**{category}**")
+            for _, item in group_df.iterrows():
+                is_on = int(item["is_available"]) != 0
+                col_name, col_btn = st.columns([4, 2])
+                with col_name:
+                    st.markdown(item["menu_name"] if is_on else f"~~{item['menu_name']}~~ :red[**หมด**]")
+                with col_btn:
+                    if st.button(
+                        "🚫 ตั้งเป็นหมด" if is_on else "✅ เปิดขายอีกครั้ง",
+                        key=f"avail_{kind}_{item['menu_name']}", use_container_width=True,
+                    ):
+                        set_menu_available(item["menu_name"], not is_on)
+                        st.rerun()
+
+
 def complete_food_order(order_id, table_no):
     """ตอนครัวกด 'เสร็จแล้ว': บันทึกยอดขายเฉพาะรายการอาหาร (ไม่รวมเครื่องดื่ม ฝั่งแคชเชียร์จะบันทึกเองแยกต่างหาก)
     คืน True ถ้าปิดสำเร็จครั้งนี้ / False ถ้าออเดอร์ถูกปิดไปแล้ว (ไม่บันทึกยอดซ้ำ)"""
@@ -379,6 +434,23 @@ def print_kitchen_ticket(order_row, items_df, label="ใบสั่งอาห
 # ================= หน้าสั่งอาหารสำหรับลูกค้า (ไม่ต้อง login) =================
 query_params = st.query_params
 if query_params.get("page") == "order":
+    # หน้าลูกค้า: ซ่อนแถบเมนู/ปุ่ม Share-GitHub-Deploy ของ Streamlit (QR ไม่ใช้ embed=true แล้ว เพราะ embed ทำให้ Streamlit Cloud
+    # แปะแถบ "Built with Streamlit / Fullscreen" ที่โค้ดเราลบไม่ได้ และปุ่ม Fullscreen พาลูกค้าไปหน้าล็อกอิน)
+    st.markdown(
+        """
+        <style>
+        header[data-testid="stHeader"],
+        [data-testid="stToolbar"],
+        [data-testid="stDecoration"],
+        [data-testid="stStatusWidget"],
+        [data-testid="stAppDeployButton"],
+        .stAppDeployButton,
+        #MainMenu,
+        footer { display: none !important; visibility: hidden !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     brand_key = query_params.get("brand", "default")
     contact = CONTACT_INFO.get(brand_key, CONTACT_INFO["default"])
     zone_filter = query_params.get("zone", "").strip()
@@ -427,6 +499,11 @@ if query_params.get("page") == "order":
     if st.session_state.get("order_just_placed_total") is not None:
         st.success(f"สั่งอาหารเรียบร้อย! รวม {st.session_state['order_just_placed_total']:,.0f} บาท ทางร้านกำลังเตรียมให้ครับ 🙏")
         st.session_state["order_just_placed_total"] = None
+
+    if st.session_state.get("sold_out_notice"):
+        st.warning("ขออภัยครับ เมนูต่อไปนี้เพิ่งหมด จึงยังไม่ได้ส่งออเดอร์: " + " , ".join(st.session_state["sold_out_notice"])
+                   + " — กรุณาเลือกเมนูอื่นแล้วกดสั่งอีกครั้งครับ")
+        st.session_state["sold_out_notice"] = None
 
     menu_df = get_menu_list()
 
@@ -557,11 +634,15 @@ if query_params.get("page") == "order":
                 item_label = row["menu_name"]
                 if row.get("is_recommended"):
                     item_label = f"⭐ แนะนำ | {item_label}"
-                st.number_input(
-                    f"{item_label} ({row['price']:,.0f} บาท)",
-                    min_value=0, step=1, key=f"cust_qty_{row['menu_name']}"
-                )
-                _render_note_input(f"cust_qty_{row['menu_name']}", f"cust_note_{row['menu_name']}", category_name)
+                if not _row_available(row):
+                    st.session_state.pop(f"cust_qty_{row['menu_name']}", None)
+                    st.markdown(f"~~{item_label}~~ &nbsp; :red[**หมด**]")
+                else:
+                    st.number_input(
+                        f"{item_label} ({row['price']:,.0f} บาท)",
+                        min_value=0, step=1, key=f"cust_qty_{row['menu_name']}"
+                    )
+                    _render_note_input(f"cust_qty_{row['menu_name']}", f"cust_note_{row['menu_name']}", category_name)
                 if pd.notna(row.get("description")) and str(row.get("description")).strip():
                     st.caption(row["description"])
 
@@ -597,16 +678,20 @@ if query_params.get("page") == "order":
                     selected_row = variants_df[
                         variants_df["size_label"].fillna(variants_df["menu_name"]) == selected_size
                     ].iloc[0]
-                    st.number_input(
-                        f"{selected_size} ({selected_row['price']:,.0f} บาท)",
-                        min_value=0, step=1,
-                        key=f"cust_qty_sized_{category_name}_{size_group_name}",
-                    )
-                    _render_note_input(
-                        f"cust_qty_sized_{category_name}_{size_group_name}",
-                        f"cust_note_sized_{category_name}_{size_group_name}",
-                        category_name,
-                    )
+                    if not _row_available(selected_row):
+                        st.session_state.pop(f"cust_qty_sized_{category_name}_{size_group_name}", None)
+                        st.markdown(f"~~{selected_size}~~ &nbsp; :red[**หมด**] (เลือกไซส์อื่นได้)")
+                    else:
+                        st.number_input(
+                            f"{selected_size} ({selected_row['price']:,.0f} บาท)",
+                            min_value=0, step=1,
+                            key=f"cust_qty_sized_{category_name}_{size_group_name}",
+                        )
+                        _render_note_input(
+                            f"cust_qty_sized_{category_name}_{size_group_name}",
+                            f"cust_note_sized_{category_name}_{size_group_name}",
+                            category_name,
+                        )
                     if pd.notna(selected_row.get("description")) and str(selected_row.get("description")).strip():
                         st.caption(selected_row["description"])
 
@@ -617,6 +702,8 @@ if query_params.get("page") == "order":
             for cat_name, grp_df in display_menu_df.groupby("category"):
                 has_sg = grp_df["size_group"].fillna("").str.strip() != ""
                 for _, r in grp_df[~has_sg].iterrows():
+                    if not _row_available(r):
+                        continue
                     q = st.session_state.get(f"cust_qty_{r['menu_name']}", 0)
                     if q and q > 0:
                         note = "" if _is_drink_category(cat_name) else clean_note(st.session_state.get(f"cust_note_{r['menu_name']}", ""))
@@ -629,6 +716,8 @@ if query_params.get("page") == "order":
                     if matched.empty:
                         continue
                     sel_row = matched.iloc[0]
+                    if not _row_available(sel_row):
+                        continue
                     q = st.session_state.get(f"cust_qty_sized_{cat_name}_{sg_name}", 0)
                     if q and q > 0:
                         note = "" if _is_drink_category(cat_name) else clean_note(st.session_state.get(f"cust_note_sized_{cat_name}_{sg_name}", ""))
@@ -656,11 +745,15 @@ if query_params.get("page") == "order":
             for _, prow in package_df.iterrows():
                 with st.container(border=True):
                     st.markdown(f"#### 🍽️ {_clean_package_label(prow['menu_name'])} — {prow['price']:,.0f} บาท")
-                    st.number_input(
-                        "จำนวน (ท่าน)", min_value=0, step=1,
-                        key=f"cust_qty_{prow['menu_name']}",
-                    )
-                    _render_note_input(f"cust_qty_{prow['menu_name']}", f"cust_note_{prow['menu_name']}", prow["category"])
+                    if not _row_available(prow):
+                        st.session_state.pop(f"cust_qty_{prow['menu_name']}", None)
+                        st.markdown(":red[**หมด**]")
+                    else:
+                        st.number_input(
+                            "จำนวน (ท่าน)", min_value=0, step=1,
+                            key=f"cust_qty_{prow['menu_name']}",
+                        )
+                        _render_note_input(f"cust_qty_{prow['menu_name']}", f"cust_note_{prow['menu_name']}", prow["category"])
 
         # ---------------- หน้าเลือกหมวดหมู่ / รายการเมนูในหมวดที่เลือก (เฉพาะอาหารจริง ไม่รวมราคาแพ็กเกจ) ----------------
         # ลำดับหมวดหมู่ตามที่ร้านต้องการ:
@@ -759,6 +852,11 @@ if query_params.get("page") == "order":
                 except OrderRejected as rejected:
                     if rejected.code == "cooldown":
                         st.warning(f"เพิ่งส่งออเดอร์ไปเมื่อสักครู่ครับ กรุณารออีก {rejected.retry_after} วินาที แล้วกดสั่งอีกครั้ง (ออเดอร์ก่อนหน้าส่งถึงครัวแล้ว)")
+                    elif rejected.code == "sold_out":
+                        # หน้าจอลูกค้าเปิดค้างไว้ก่อนครัวกดหมด: ล้างแคชเมนูแล้วโหลดหน้าใหม่ ให้เห็นว่าหมดทันที ของที่เหลือในตะกร้ายังอยู่
+                        get_menu_list.clear()
+                        st.session_state["sold_out_notice"] = rejected.items
+                        st.rerun()
                     elif rejected.code == "too_many_waiting":
                         st.warning("โต๊ะนี้มีออเดอร์รอทำอยู่หลายรายการแล้วครับ กรุณารอให้ครัวทำเสร็จก่อน หรือเรียกพนักงาน")
                     else:
@@ -1438,6 +1536,7 @@ elif page == "💰 การเงิน":
 elif page == "👨‍🍳 ครัว (ออเดอร์)":
     st.header("👨‍🍳 ออเดอร์อาหารจากลูกค้า")
     st.caption("หน้านี้โชว์เฉพาะรายการอาหาร — เครื่องดื่มจะไปแจ้งเตือนฝั่งแคชเชียร์แยกต่างหาก | หน้าจอรีเฟรชอัตโนมัติทุก 5 วินาที พร้อมเสียงแจ้งเตือนเมื่อมีออเดอร์ใหม่")
+    render_menu_availability_panel("food")
 
     @st.fragment(run_every="5s")
     def _kitchen_orders_fragment():
@@ -1493,6 +1592,7 @@ elif page == "👨‍🍳 ครัว (ออเดอร์)":
 elif page == "🥤 แคชเชียร์ (เครื่องดื่ม)":
     st.header("🥤 ออเดอร์เครื่องดื่มจากลูกค้า")
     st.caption("หน้านี้โชว์เฉพาะรายการเครื่องดื่ม — อาหารไปอยู่ฝั่งครัวแยกต่างหาก | หน้าจอรีเฟรชอัตโนมัติทุก 5 วินาที พร้อมเสียงแจ้งเตือนเมื่อมีออเดอร์ใหม่")
+    render_menu_availability_panel("drink")
 
     @st.fragment(run_every="5s")
     def _cashier_drink_orders_fragment():
@@ -1648,7 +1748,7 @@ elif page == "📱 QR สั่งอาหาร":
         elif not is_safe_table_label(table_number):
             st.error("หมายเลขโต๊ะต้องยาวไม่เกิน 20 ตัวอักษร และห้ามมีอักขระพิเศษ < > \" ' & | \\ % `")
         else:
-            # QR ถูกเซ็นด้วย qr_secret: ลูกค้าแก้เลขโต๊ะ/โซนใน URL เองไม่ได้ (ซ่อนแถบ Streamlit Cloud ด้วย embed=true)
+            # QR ถูกเซ็นด้วย qr_secret: ลูกค้าแก้เลขโต๊ะ/โซนใน URL เองไม่ได้ (หน้าลูกค้าซ่อนแถบของ Streamlit ด้วย CSS ไม่ใช้ embed=true)
             order_url = build_order_url(_qr_secret(), base_url, table_number, zone_choice_key, brand_choice)
             qr_img = qrcode.make(order_url)
             buf = io.BytesIO()
