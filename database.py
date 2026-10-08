@@ -173,6 +173,11 @@ def init_db():
         )
     """)
 
+    # ---- v5: เมนูหมด (is_available: 1 = มีขาย, 0 = หมด) เมนูเดิมทั้งหมดเป็น "มีขาย" ----
+    menu_columns = [row[1] for row in conn.execute("PRAGMA table_info(menu_prices)").fetchall()]
+    if "is_available" not in menu_columns:
+        conn.execute("ALTER TABLE menu_prices ADD COLUMN is_available INTEGER NOT NULL DEFAULT 1")
+
     # ---- v4: โซนของออเดอร์ + หมายเหตุรายรายการ + index สำหรับ query หน้าครัว ----
     orders_columns = [row[1] for row in conn.execute("PRAGMA table_info(orders)").fetchall()]
     if "zone" not in orders_columns:
@@ -469,10 +474,10 @@ def get_menu_list():
     แคชไว้ 15 วินาที ลดเวลาโหลดหน้าเว็บ (เมนูไม่ได้เปลี่ยนบ่อยขนาดต้องเช็คทุกครั้งที่กดปุ่ม)"""
     conn = get_connection()
     rows = conn.execute(
-        "SELECT menu_name, price, category, image, description, is_recommended, size_group, size_label, time_from, time_to, days_available, zones FROM menu_prices ORDER BY menu_name"
+        "SELECT menu_name, price, category, image, description, is_recommended, size_group, size_label, time_from, time_to, days_available, zones, is_available FROM menu_prices ORDER BY menu_name"
     ).fetchall()
     conn.close()
-    return pd.DataFrame(rows, columns=["menu_name", "price", "category", "image", "description", "is_recommended", "size_group", "size_label", "time_from", "time_to", "days_available", "zones"])
+    return pd.DataFrame(rows, columns=["menu_name", "price", "category", "image", "description", "is_recommended", "size_group", "size_label", "time_from", "time_to", "days_available", "zones", "is_available"])
 
 
 # ---------------- Orders (สั่งอาหารผ่าน QR) ----------------
@@ -493,12 +498,13 @@ _DB_LOCK = threading.RLock()
 
 
 class OrderRejected(Exception):
-    """ออเดอร์ถูกปฏิเสธด้วยเหตุผลทางธุรกิจ (ไม่ใช่ error ของระบบ) code: empty / cooldown / too_many_waiting"""
+    """ออเดอร์ถูกปฏิเสธด้วยเหตุผลทางธุรกิจ (ไม่ใช่ error ของระบบ) code: empty / cooldown / too_many_waiting / sold_out"""
 
-    def __init__(self, code, retry_after=0):
+    def __init__(self, code, retry_after=0, items=None):
         super().__init__(code)
         self.code = code
         self.retry_after = retry_after
+        self.items = list(items or [])  # code "sold_out": ชื่อเมนูที่หมด
 
 
 @st.cache_resource(show_spinner=False)
@@ -581,6 +587,16 @@ def create_order(table_no, items, zone=None):
     cutoff = (now - timedelta(seconds=ORDER_COOLDOWN_SECONDS)).strftime(TS_FORMAT)
 
     def _tx(conn):
+        # เมนูที่ "หมด" ห้ามเข้าออเดอร์ แม้หน้าจอลูกค้าจะเปิดค้างไว้ก่อนครัวกดหมด (เช็คในธุรกรรมเดียวกับการสร้างออเดอร์)
+        names = [item[0] for item in clean_items]
+        placeholders_names = ",".join(["?"] * len(names))
+        sold_out_rows = conn.execute(
+            f"SELECT menu_name FROM menu_prices WHERE is_available = 0 AND menu_name IN ({placeholders_names})",
+            tuple(names),
+        ).fetchall()
+        if sold_out_rows:
+            raise OrderRejected("sold_out", items=[row[0] for row in sold_out_rows])
+
         inserted = conn.execute(
             """
             INSERT INTO orders (table_no, created_at, status, drink_status, zone)
@@ -845,3 +861,55 @@ def acknowledge_staff_call(call_id):
     def _tx(conn):
         conn.execute("UPDATE staff_calls SET status = 'acknowledged' WHERE id = ? AND status = 'pending'", (call_id,))
     _run(_tx)
+
+
+# ---------------- Menu availability (เมนูหมด) ----------------
+
+def get_menu_availability():
+    """รายการเมนูทั้งหมดแบบเบา (ไม่ดึงรูป) สำหรับหน้าจอจัดการเมนูหมดของพนักงาน — ไม่แคช เพื่อให้เห็นสถานะล่าสุดเสมอ"""
+    def _q(conn):
+        return conn.execute(
+            "SELECT menu_name, category, is_available FROM menu_prices ORDER BY category, menu_name"
+        ).fetchall()
+    return pd.DataFrame(_run(_q), columns=["menu_name", "category", "is_available"])
+
+
+def set_menu_available(menu_name, available):
+    """ตั้งเมนูเดียวเป็น มีขาย (True) / หมด (False) — คืน True ถ้ามีเมนูนี้อยู่จริง"""
+    menu_name = unicodedata.normalize("NFC", str(menu_name or "")).strip()
+    value = 1 if available else 0
+
+    def _tx(conn):
+        rows = conn.execute(
+            "UPDATE menu_prices SET is_available = ? WHERE menu_name = ? RETURNING menu_name",
+            (value, menu_name),
+        ).fetchall()
+        return len(rows) > 0
+
+    updated = _run(_tx)
+    get_menu_list.clear()  # หน้าลูกค้าเห็นการเปลี่ยนทันที ไม่ต้องรอแคช 15 วิ
+    return updated
+
+
+def set_menus_available(menu_names, available):
+    """ตั้งหลายเมนูพร้อมกัน (เช่น ทั้งหมวดหมู่) ในธุรกรรมเดียว — คืนจำนวนเมนูที่เปลี่ยน"""
+    names = [unicodedata.normalize("NFC", str(n)).strip() for n in (menu_names or []) if n]
+    if not names:
+        return 0
+    value = 1 if available else 0
+
+    def _tx(conn):
+        total = 0
+        for start in range(0, len(names), 50):
+            chunk = names[start:start + 50]
+            marks = ",".join(["?"] * len(chunk))
+            rows = conn.execute(
+                f"UPDATE menu_prices SET is_available = ? WHERE menu_name IN ({marks}) RETURNING menu_name",
+                (value, *chunk),
+            ).fetchall()
+            total += len(rows)
+        return total
+
+    changed = _run(_tx)
+    get_menu_list.clear()
+    return changed
