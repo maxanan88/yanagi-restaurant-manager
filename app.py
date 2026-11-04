@@ -447,6 +447,22 @@ if query_params.get("page") == "order":
         .stAppDeployButton,
         #MainMenu,
         footer { display: none !important; visibility: hidden !important; }
+        /* Guest ordering: a quieter, editorial canvas with larger touch targets. */
+        [data-testid="stAppViewContainer"] { background: #FAF8F5; }
+        [data-testid="stMainBlockContainer"] { max-width: 900px; padding-top: 1.25rem; padding-bottom: 7rem; }
+        [data-testid="stMainBlockContainer"] h1 { font-family: Georgia, 'Noto Serif Thai', serif !important; font-size: clamp(2rem, 7vw, 3rem); letter-spacing: .04em; color: #1A1A1A !important; margin-bottom: .15rem; }
+        [data-testid="stMainBlockContainer"] h2, [data-testid="stMainBlockContainer"] h3, [data-testid="stMainBlockContainer"] h4 { font-family: Georgia, 'Noto Serif Thai', serif !important; color: #1A1A1A !important; }
+        [data-testid="stMainBlockContainer"] [data-testid="stCaptionContainer"] { color: #82776C; }
+        [data-testid="stMainBlockContainer"] .stButton > button { min-height: 3rem; border-radius: 999px; font-weight: 600; letter-spacing: .02em; box-shadow: 0 5px 16px rgba(60,34,26,.08); }
+        [data-testid="stMainBlockContainer"] .stButton > button[kind="secondary"] { background: rgba(255,255,255,.8); border-color: #E7DED4; color: #342D28; box-shadow: none; }
+        [data-testid="stMainBlockContainer"] [data-testid="stNumberInput"] input { min-height: 2.8rem; border-radius: 12px; }
+        [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlockBorderWrapper"] { border: 1px solid #E8DFD5 !important; border-radius: 18px !important; background: rgba(255,255,255,.88) !important; box-shadow: 0 8px 28px rgba(46,35,27,.045); padding: .35rem; }
+        [data-testid="stMainBlockContainer"] [data-testid="stAlert"] { border-radius: 14px; }
+        @media (max-width: 640px) {
+          [data-testid="stMainBlockContainer"] { padding: .75rem 1rem 7rem; }
+          [data-testid="stMainBlockContainer"] h1 { font-size: 2rem; }
+          [data-testid="stMainBlockContainer"] .stButton > button { min-height: 3.25rem; }
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -475,9 +491,15 @@ if query_params.get("page") == "order":
             zone_filter = ""
     is_vip_room = zone_filter in ("vip", "vip_nabe_buffet", "vip_nabe_alacarte")
 
+    st.markdown(
+        "<div style='height:4px;width:52px;background:#A6192E;border-radius:99px;margin:2px 0 18px'></div>"
+        "<div style='font-size:11px;letter-spacing:.24em;text-transform:uppercase;color:#A6192E;font-weight:700'>A Japanese dining experience</div>",
+        unsafe_allow_html=True,
+    )
     col_title, col_contact = st.columns([3, 1])
     with col_title:
-        st.title(f"{LOGO_EMOJI} สั่งอาหาร - {RESTAURANT_NAME}")
+        st.title(f"{RESTAURANT_NAME}")
+        st.caption("Seasonal plates · Thoughtfully prepared · Served with care")
     with col_contact:
         if is_vip_room:
             if st.button("🔔 เรียกพนักงาน", use_container_width=True, type="primary"):
@@ -493,7 +515,7 @@ if query_params.get("page") == "order":
             contact_lines.append(f"☎️ {contact['tel']}")
         st.markdown("<br>".join(contact_lines), unsafe_allow_html=True)
 
-    st.caption("ราคาทั้งหมดยังไม่รวม Service Charge 10% และ VAT 7% (All prices are subject to 10% service charge and 7% VAT)")
+    st.caption("ราคาทั้งหมดยังไม่รวม Service Charge 10% และ VAT 7% · All prices are subject to 10% service charge and 7% VAT")
 
     # โชว์ข้อความสั่งสำเร็จค้างไว้ข้ามรอบ rerun (ต้อง rerun เพื่อให้ตะกร้าเคลียร์จริงๆ ในหน้าจอ)
     if st.session_state.get("order_just_placed_total") is not None:
@@ -562,7 +584,7 @@ if query_params.get("page") == "order":
             display_menu_df.apply(_time_ok, axis=1) & display_menu_df.apply(_day_ok, axis=1)
         ]
 
-        st.markdown(f"#### 🪑 โต๊ะ {html_lib.escape(table_no)}")  # ล็อกตามลายเซ็น QR ลูกค้าแก้เองไม่ได้
+        st.markdown(f"#### โต๊ะ {html_lib.escape(table_no)}")  # ล็อกตามลายเซ็น QR ลูกค้าแก้เองไม่ได้
 
         # ---------------- ตัวช่วยแสดงชื่อหมวดหมู่แบบสั้น + ไอคอน ให้ปุ่มดูเป็นมิตรกับลูกค้า ----------------
         import unicodedata as _unicodedata
@@ -652,9 +674,11 @@ if query_params.get("page") == "order":
             sized_items = group_df[has_size_group]
 
             for _, row in standalone_items.iterrows():
-                _render_item_row(row, category_name)
+                with st.container(border=True):
+                    _render_item_row(row, category_name)
 
             for size_group_name, variants_df in sized_items.groupby("size_group"):
+              with st.container(border=True):
                 col_img, col_info = st.columns([1, 3])
                 first_row = variants_df.iloc[0]
                 with col_img:
@@ -804,7 +828,13 @@ if query_params.get("page") == "order":
         cart_preview = _collect_cart_items()
         if cart_preview:
             cart_total = sum(q * p for _, q, p, _, _ in cart_preview)
-            st.info(f"🛒 ตอนนี้เลือกไว้ {len(cart_preview)} รายการ รวม {cart_total:,.0f} บาท (เลื่อนดูหมวดอื่นต่อได้ ของที่เลือกไว้จะไม่หาย)")
+            st.markdown(
+                f"<div style='position:sticky;top:8px;z-index:5;background:#1A1A1A;color:#FAF8F5;padding:14px 18px;border-radius:16px;box-shadow:0 10px 28px rgba(0,0,0,.16);margin:12px 0 18px;display:flex;justify-content:space-between;align-items:center'>"
+                f"<span style='color:#FAF8F5'>ตะกร้าของคุณ <span style='color:#D4AF37'>·</span> {len(cart_preview)} รายการ</span>"
+                f"<strong style='color:#FAF8F5;font-size:1.1rem'>{cart_total:,.0f} บาท</strong></div>",
+                unsafe_allow_html=True,
+            )
+            st.caption("รายการที่เลือกจะยังอยู่เมื่อเปลี่ยนหมวดหมู่")
 
         if selected_category is None and len(categories) == 1:
             selected_category = categories[0]  # หมวดเดียวในโซนนี้ ไม่ต้องให้กดเลือกซ้ำ เข้าเมนูตรงๆ เลย
