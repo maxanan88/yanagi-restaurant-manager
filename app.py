@@ -447,21 +447,29 @@ if query_params.get("page") == "order":
         .stAppDeployButton,
         #MainMenu,
         footer { display: none !important; visibility: hidden !important; }
-        /* Guest ordering: a quieter, editorial canvas with larger touch targets. */
-        [data-testid="stAppViewContainer"] { background: #FAF8F5; }
-        [data-testid="stMainBlockContainer"] { max-width: 900px; padding-top: 1.25rem; padding-bottom: 7rem; }
-        [data-testid="stMainBlockContainer"] h1 { font-family: Georgia, 'Noto Serif Thai', serif !important; font-size: clamp(2rem, 7vw, 3rem); letter-spacing: .04em; color: #1A1A1A !important; margin-bottom: .15rem; }
-        [data-testid="stMainBlockContainer"] h2, [data-testid="stMainBlockContainer"] h3, [data-testid="stMainBlockContainer"] h4 { font-family: Georgia, 'Noto Serif Thai', serif !important; color: #1A1A1A !important; }
-        [data-testid="stMainBlockContainer"] [data-testid="stCaptionContainer"] { color: #82776C; }
-        [data-testid="stMainBlockContainer"] .stButton > button { min-height: 3rem; border-radius: 999px; font-weight: 600; letter-spacing: .02em; box-shadow: 0 5px 16px rgba(60,34,26,.08); }
-        [data-testid="stMainBlockContainer"] .stButton > button[kind="secondary"] { background: rgba(255,255,255,.8); border-color: #E7DED4; color: #342D28; box-shadow: none; }
+        /* Guest ordering: refined Japanese dining palette, clear type and generous touch targets. */
+        [data-testid="stAppViewContainer"] { background: #F7F4ED; }
+        [data-testid="stMainBlockContainer"] { max-width: 940px; padding-top: 1.25rem; padding-bottom: 7rem; }
+        [data-testid="stMainBlockContainer"] h1 { font-family: Georgia, 'Noto Serif Thai', serif !important; font-size: clamp(2.2rem, 7vw, 3.5rem); letter-spacing: .16em; color: #172923 !important; margin: 0; }
+        [data-testid="stMainBlockContainer"] h2, [data-testid="stMainBlockContainer"] h3, [data-testid="stMainBlockContainer"] h4 { font-family: Georgia, 'Noto Serif Thai', serif !important; color: #172923 !important; }
+        [data-testid="stMainBlockContainer"] [data-testid="stCaptionContainer"] { color: #756F62; }
+        [data-testid="stMainBlockContainer"] .stButton > button { min-height: 3rem; border-radius: 999px; font-weight: 600; letter-spacing: .02em; box-shadow: 0 5px 16px rgba(23,41,35,.10); }
+        [data-testid="stMainBlockContainer"] .stButton > button[kind="primary"] { background:#203A30; border-color:#203A30; color:#F7F4ED; }
+        [data-testid="stMainBlockContainer"] .stButton > button[kind="primary"]:hover { background:#C5A46A; border-color:#C5A46A; color:#172923; }
+        [data-testid="stMainBlockContainer"] .stButton > button[kind="secondary"] { background: rgba(255,255,255,.8); border-color: #DDD6C8; color: #263A32; box-shadow: none; }
         [data-testid="stMainBlockContainer"] [data-testid="stNumberInput"] input { min-height: 2.8rem; border-radius: 12px; }
-        [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlockBorderWrapper"] { border: 1px solid #E8DFD5 !important; border-radius: 18px !important; background: rgba(255,255,255,.88) !important; box-shadow: 0 8px 28px rgba(46,35,27,.045); padding: .35rem; }
+        [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlockBorderWrapper"] { border: 1px solid #E3DDCF !important; border-radius: 18px !important; background: rgba(255,255,255,.92) !important; box-shadow: 0 8px 28px rgba(23,41,35,.055); padding: .35rem; }
         [data-testid="stMainBlockContainer"] [data-testid="stAlert"] { border-radius: 14px; }
+        .yanagi-hero { background: linear-gradient(135deg,#172923,#233C32); color:#F7F4ED; border-radius:24px; padding:28px 30px; margin:10px 0 18px; box-shadow:0 16px 36px rgba(23,41,35,.14); border:1px solid rgba(197,164,106,.38); }
+        .yanagi-kicker { color:#D9C292; font:600 10px/1.4 Arial,sans-serif; letter-spacing:.28em; text-transform:uppercase; margin-bottom:8px; }
+        .yanagi-tagline { color:#E4E0D5; font-size:14px; letter-spacing:.03em; margin-top:7px; }
+        .yanagi-rule { height:1px; background:linear-gradient(90deg,#C5A46A,transparent); margin-top:20px; }
+        .yanagi-table { display:inline-block; color:#263A32; background:#E7D7B7; border-radius:999px; padding:7px 14px; font-size:13px; font-weight:700; letter-spacing:.04em; margin:0 0 10px; }
         @media (max-width: 640px) {
           [data-testid="stMainBlockContainer"] { padding: .75rem 1rem 7rem; }
-          [data-testid="stMainBlockContainer"] h1 { font-size: 2rem; }
+          [data-testid="stMainBlockContainer"] h1 { font-size: 2.1rem; }
           [data-testid="stMainBlockContainer"] .stButton > button { min-height: 3.25rem; }
+          .yanagi-hero { padding:23px 20px; border-radius:20px; }
         }
         </style>
         """,
@@ -491,15 +499,15 @@ if query_params.get("page") == "order":
             zone_filter = ""
     is_vip_room = zone_filter in ("vip", "vip_nabe_buffet", "vip_nabe_alacarte")
 
-    st.markdown(
-        "<div style='height:4px;width:52px;background:#A6192E;border-radius:99px;margin:2px 0 18px'></div>"
-        "<div style='font-size:11px;letter-spacing:.24em;text-transform:uppercase;color:#A6192E;font-weight:700'>A Japanese dining experience</div>",
-        unsafe_allow_html=True,
-    )
     col_title, col_contact = st.columns([3, 1])
     with col_title:
-        st.title(f"{RESTAURANT_NAME}")
-        st.caption("Seasonal plates · Thoughtfully prepared · Served with care")
+        st.markdown(
+            f"<section class='yanagi-hero'><div class='yanagi-kicker'>Sushi · Japanese dining</div>"
+            f"<div style='font-family:Georgia,serif;font-size:clamp(34px,8vw,52px);font-weight:600;letter-spacing:.16em;color:#F7F4ED;line-height:1.1'>{html_lib.escape(RESTAURANT_NAME)}</div>"
+            "<div class='yanagi-tagline'>A considered Japanese dining experience</div>"
+            "<div class='yanagi-rule'></div></section>",
+            unsafe_allow_html=True,
+        )
     with col_contact:
         if is_vip_room:
             if st.button("🔔 เรียกพนักงาน", use_container_width=True, type="primary"):
@@ -515,7 +523,7 @@ if query_params.get("page") == "order":
             contact_lines.append(f"☎️ {contact['tel']}")
         st.markdown("<br>".join(contact_lines), unsafe_allow_html=True)
 
-    st.caption("ราคาทั้งหมดยังไม่รวม Service Charge 10% และ VAT 7% · All prices are subject to 10% service charge and 7% VAT")
+    st.caption("ราคายังไม่รวมค่าบริการ 10% และภาษีมูลค่าเพิ่ม 7% · Prices are subject to 10% service charge and 7% VAT.")
 
     # โชว์ข้อความสั่งสำเร็จค้างไว้ข้ามรอบ rerun (ต้อง rerun เพื่อให้ตะกร้าเคลียร์จริงๆ ในหน้าจอ)
     if st.session_state.get("order_just_placed_total") is not None:
@@ -584,7 +592,7 @@ if query_params.get("page") == "order":
             display_menu_df.apply(_time_ok, axis=1) & display_menu_df.apply(_day_ok, axis=1)
         ]
 
-        st.markdown(f"#### โต๊ะ {html_lib.escape(table_no)}")  # ล็อกตามลายเซ็น QR ลูกค้าแก้เองไม่ได้
+        st.markdown(f"<div class='yanagi-table'>TABLE · {html_lib.escape(table_no)}</div>", unsafe_allow_html=True)  # ล็อกตามลายเซ็น QR ลูกค้าแก้เองไม่ได้
 
         # ---------------- ตัวช่วยแสดงชื่อหมวดหมู่แบบสั้น + ไอคอน ให้ปุ่มดูเป็นมิตรกับลูกค้า ----------------
         import unicodedata as _unicodedata
