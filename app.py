@@ -182,39 +182,39 @@ h1, h2, h3, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {{
 }}
 
 .stApp {{
-    background-color: #FAF8F5;
+    background-color: #F7F4ED;
 }}
 {_background_css}
 
 [data-testid="stSidebar"] {{
-    background-color: #F5EDE8;
-    border-right: 1px solid #E3D5CB;
+    background-color: #172923;
+    border-right: 1px solid #C5A46A;
 }}
 
 [data-testid="stSidebar"] h3 {{
-    color: #A6192E !important;
+    color: #D9C292 !important;
 }}
 
 [data-testid="stSidebar"] p, [data-testid="stSidebar"] label, [data-testid="stSidebar"] span {{
-    color: #4A3F38 !important;
+    color: #E4E0D5 !important;
 }}
 
 .stButton>button {{
-    background-color: #A6192E;
-    color: #FAF8F5;
-    border: 1px solid #A6192E;
-    border-radius: 6px;
+    background-color: #203A30;
+    color: #F7F4ED;
+    border: 1px solid #203A30;
+    border-radius: 999px;
     font-family: 'Noto Sans Thai', sans-serif;
     transition: all 0.15s ease;
 }}
 .stButton>button:hover {{
-    background-color: #FAF8F5;
-    color: #A6192E;
-    border-color: #A6192E;
+    background-color: #C5A46A;
+    color: #172923;
+    border-color: #C5A46A;
 }}
 
 [data-testid="stMetricValue"] {{
-    color: #A6192E !important;
+    color: #203A30 !important;
 }}
 
 [data-testid="stMetricLabel"] {{
@@ -224,12 +224,12 @@ h1, h2, h3, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {{
 div[data-testid="stExpander"] {{
     background-color: #FFFFFF;
     border: 1px solid #E3D5CB;
-    border-radius: 8px;
+    border-radius: 14px;
 }}
 
 div[data-testid="stVerticalBlockBorderWrapper"] {{
     border-color: #E3D5CB !important;
-    border-radius: 10px !important;
+    border-radius: 16px !important;
     background-color: #FFFFFF;
 }}
 
@@ -241,6 +241,20 @@ div[data-testid="stVerticalBlockBorderWrapper"] {{
 hr {{
     border-color: #E3D5CB !important;
 }}
+
+.yanagi-hero {{
+    background: linear-gradient(135deg,#172923,#233C32);
+    color:#F7F4ED;
+    border-radius:24px;
+    padding:28px 30px;
+    margin:10px 0 22px;
+    box-shadow:0 16px 36px rgba(23,41,35,.14);
+    border:1px solid rgba(197,164,106,.48);
+}}
+.yanagi-kicker {{ color:#D9C292; font:600 10px/1.4 Arial,sans-serif; letter-spacing:.28em; text-transform:uppercase; margin-bottom:8px; }}
+.yanagi-tagline {{ color:#E4E0D5; font-size:14px; letter-spacing:.03em; margin-top:7px; }}
+.yanagi-rule {{ height:1px; background:linear-gradient(90deg,#C5A46A,transparent); margin-top:20px; }}
+@media (max-width:640px) {{ .yanagi-hero {{ padding:22px 20px; border-radius:19px; }} }}
 
 p, span, label, .stMarkdown, .stCaption {{
     color: #4A3F38;
@@ -944,24 +958,33 @@ if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
-    st.title("🔒 เข้าสู่ระบบ")
+    _, login_col, _ = st.columns([1, 1.15, 1])
+    with login_col:
+        st.markdown(
+            f"<div class='yanagi-hero' style='margin-top:8vh;text-align:center'>"
+            f"<div class='yanagi-kicker'>Restaurant operations</div>"
+            f"<div style='font:600 38px Georgia,serif;letter-spacing:.16em;color:#F7F4ED'>{html_lib.escape(RESTAURANT_NAME)}</div>"
+            "<div class='yanagi-tagline'>จัดการร้านอย่างพิถีพิถัน · Thoughtfully managed</div></div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown("### เข้าสู่ระบบพนักงาน")
+        st.caption("ระบบจัดการร้าน · Restaurant management")
+        with st.form("login_form"):
+            input_username = st.text_input("ชื่อผู้ใช้ · Username")
+            input_password = st.text_input("รหัสผ่าน · Password", type="password")
+            login_submitted = st.form_submit_button("เข้าสู่ระบบ  ·  Sign in", use_container_width=True)
 
-    with st.form("login_form"):
-        input_username = st.text_input("ชื่อผู้ใช้")
-        input_password = st.text_input("รหัสผ่าน", type="password")
-        login_submitted = st.form_submit_button("เข้าสู่ระบบ")
-
-        if login_submitted:
-            matched_user = next(
-                (u for u in USERS if u["username"] == input_username and u["password"] == input_password),
-                None
-            )
-            if matched_user:
-                st.session_state.logged_in = True
-                st.session_state.role = matched_user["role"]
-                st.rerun()
-            else:
-                st.error("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง")
+            if login_submitted:
+                matched_user = next(
+                    (u for u in USERS if u["username"] == input_username and u["password"] == input_password),
+                    None
+                )
+                if matched_user:
+                    st.session_state.logged_in = True
+                    st.session_state.role = matched_user["role"]
+                    st.rerun()
+                else:
+                    st.error("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง")
     st.stop()
 
 USER_ROLE = st.session_state.get("role", "staff")
@@ -1021,8 +1044,13 @@ with st.sidebar:
 
 # ================= หน้า: หน้าหลัก (แดชบอร์ด) =================
 if page == "🏠 หน้าหลัก":
-    st.title(f"{LOGO_EMOJI} {RESTAURANT_NAME}")
-    st.caption("👋 สวัสดีครับ วันนี้ร้านเรามีอะไรบ้าง")
+    st.markdown(
+        f"<section class='yanagi-hero'><div class='yanagi-kicker'>Restaurant operations · Daily overview</div>"
+        f"<div style='font:600 clamp(30px,5vw,46px) Georgia,serif;letter-spacing:.12em;color:#F7F4ED'>{html_lib.escape(RESTAURANT_NAME)}</div>"
+        "<div class='yanagi-tagline'>ภาพรวมการดำเนินงานวันนี้ · Today's service at a glance</div>"
+        "<div class='yanagi-rule'></div></section>",
+        unsafe_allow_html=True,
+    )
 
     _dashboard_inventory = get_all_inventory()
 
