@@ -474,6 +474,12 @@ if query_params.get("page") == "order":
         [data-testid="stMainBlockContainer"] [data-testid="stNumberInput"] input { min-height: 2.8rem; border-radius: 12px; }
         [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlockBorderWrapper"] { border: 1px solid #E3DDCF !important; border-radius: 18px !important; background: rgba(255,255,255,.92) !important; box-shadow: 0 8px 28px rgba(23,41,35,.055); padding: .35rem; }
         [data-testid="stMainBlockContainer"] [data-testid="stAlert"] { border-radius: 14px; }
+        [data-testid="stMainBlockContainer"] [class*="st-key-catbtn_"] button { text-align:left; justify-content:flex-start; padding: .9rem 1.15rem; background:#fff; color:#203A30; border:1px solid #E3DDCF; box-shadow:0 5px 18px rgba(23,41,35,.04); }
+        [data-testid="stMainBlockContainer"] [class*="st-key-catbtn_"] button:hover { background:#203A30; color:#F7F4ED; border-color:#203A30; transform:translateY(-1px); }
+        [data-testid="stMainBlockContainer"] [data-testid="stImage"] img { border-radius:14px; object-fit:cover; }
+        .st-key-yanagi-order-dock { position:fixed; z-index:99; left:0; right:0; bottom:0; padding:12px max(18px, calc((100vw - 900px)/2)); background:rgba(250,248,245,.94); border-top:1px solid #E6DED2; backdrop-filter:blur(14px); }
+        .st-key-yanagi-order-dock [data-testid="stVerticalBlock"] { max-width:900px; margin:0 auto; }
+        .st-key-yanagi-order-dock .stButton>button { min-height:3.4rem; border-radius:14px; box-shadow:0 8px 22px rgba(32,58,48,.2); }
         .yanagi-hero { background: linear-gradient(135deg,#172923,#233C32); color:#F7F4ED; border-radius:24px; padding:28px 30px; margin:10px 0 18px; box-shadow:0 16px 36px rgba(23,41,35,.14); border:1px solid rgba(197,164,106,.38); }
         .yanagi-kicker { color:#D9C292; font:600 10px/1.4 Arial,sans-serif; letter-spacing:.28em; text-transform:uppercase; margin-bottom:8px; }
         .yanagi-tagline { color:#E4E0D5; font-size:14px; letter-spacing:.03em; margin-top:7px; }
@@ -513,29 +519,28 @@ if query_params.get("page") == "order":
             zone_filter = ""
     is_vip_room = zone_filter in ("vip", "vip_nabe_buffet", "vip_nabe_alacarte")
 
-    col_title, col_contact = st.columns([3, 1])
-    with col_title:
-        st.markdown(
-            f"<section class='yanagi-hero'><div class='yanagi-kicker'>Sushi · Japanese dining</div>"
-            f"<div style='font-family:Georgia,serif;font-size:clamp(34px,8vw,52px);font-weight:600;letter-spacing:.16em;color:#F7F4ED;line-height:1.1'>{html_lib.escape(RESTAURANT_NAME)}</div>"
-            "<div class='yanagi-tagline'>A considered Japanese dining experience</div>"
-            "<div class='yanagi-rule'></div></section>",
-            unsafe_allow_html=True,
-        )
+    st.markdown(
+        f"<section class='yanagi-hero'><div class='yanagi-kicker'>SUSHI · IZAKAYA · JAPANESE DINING</div>"
+        f"<div style='font-family:Georgia,serif;font-size:clamp(38px,9vw,58px);font-weight:600;letter-spacing:.19em;color:#F7F4ED;line-height:1.08'>{html_lib.escape(RESTAURANT_NAME)}</div>"
+        "<div class='yanagi-tagline'>An invitation to slow down and savour.</div>"
+        "<div class='yanagi-rule'></div></section>",
+        unsafe_allow_html=True,
+    )
+    col_contact, col_call = st.columns([3, 1])
     with col_contact:
-        if is_vip_room:
-            if st.button("🔔 เรียกพนักงาน", use_container_width=True, type="primary"):
-                room_label = table_no or "ห้อง VIP"
-                if create_staff_call(room_label):
-                    st.success(f"แจ้งพนักงานแล้ว! ({room_label})")
-                else:
-                    st.info("แจ้งพนักงานไปแล้วครับ กรุณารอสักครู่ 🙏")
-        contact_lines = [f"**📘 [{contact['name']}]({contact['fb_url']})**"]
+        contact_lines = [f"**[{contact['name']}]({contact['fb_url']})**"]
         if contact.get("line"):
-            contact_lines.append(f"💬 Line: @{contact['line']}")
+            contact_lines.append(f"Line: @{contact['line']}")
         if contact.get("tel"):
-            contact_lines.append(f"☎️ {contact['tel']}")
-        st.markdown("<br>".join(contact_lines), unsafe_allow_html=True)
+            contact_lines.append(f"☎ {contact['tel']}")
+        st.markdown("&nbsp;&nbsp;·&nbsp;&nbsp;".join(contact_lines), unsafe_allow_html=True)
+    with col_call:
+        if is_vip_room and st.button("🔔 เรียกพนักงาน", use_container_width=True, type="primary"):
+            room_label = table_no or "ห้อง VIP"
+            if create_staff_call(room_label):
+                st.success(f"แจ้งพนักงานแล้ว! ({room_label})")
+            else:
+                st.info("แจ้งพนักงานไปแล้วครับ กรุณารอสักครู่ 🙏")
 
     st.caption("ราคายังไม่รวมค่าบริการ 10% และภาษีมูลค่าเพิ่ม 7% · Prices are subject to 10% service charge and 7% VAT.")
 
@@ -880,7 +885,8 @@ if query_params.get("page") == "order":
             )
 
         st.divider()
-        submitted_order = st.button("🛒 สั่งอาหาร", type="primary", use_container_width=True)
+        with st.container(key="yanagi-order-dock"):
+            submitted_order = st.button("ยืนยันรายการ · สั่งอาหาร", type="primary", use_container_width=True)
 
         if submitted_order:
             cart_items = _collect_cart_items()
@@ -1837,7 +1843,7 @@ elif page == "📱 QR สั่งอาหาร":
         start_table = st.number_input("โต๊ะเริ่มต้น", min_value=1, step=1, value=1)
     with col_b:
         end_table = st.number_input("โต๊ะสุดท้าย", min_value=1, step=1, value=10)
-    batch_zone_choice_key = st.selectbox(
+    batch_zone_choice_key = st.selectbox)
         "โซนของโต๊ะช่วงนี้",
         list(QR_ZONE_OPTIONS.keys()),
         format_func=lambda k: QR_ZONE_OPTIONS[k],
